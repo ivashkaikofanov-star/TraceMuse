@@ -3,10 +3,12 @@ import sqlite3
 from io import BytesIO
 
 import pytest
+import httpx
 from fastapi.testclient import TestClient
 from pypdf import PdfReader
 
 from app.config import settings
+from app import deepseek
 from app.main import app
 from app.audits import assessment, upload_directory
 
@@ -109,6 +111,38 @@ def test_secret_validation_does_not_echo_input(isolated_data):
         response = session.put('/api/settings/deepseek', json={'api_key': invalid})
         assert response.status_code == 422
         assert invalid not in response.text
+
+
+def test_mai_settings_route_and_audit(isolated_data, monkeypatch):
+    monkeypatch.setattr(settings, 'ai_provider', 'mai')
+    monkeypatch.setattr(settings, 'mai_tls_verify', False)
+    monkeypatch.setattr(settings, 'mai_model', 'deepseek-v4.1-flash')
+
+    def provider(request):
+        assert request.headers['authorization'] == 'Bearer sk-mai-test'
+        if request.url.path == '/v1/models':
+            return httpx.Response(200, json={'data': [{'id': 'deepseek-v4.1-flash'}]})
+        assert request.url.path == '/v1/chat/completions'
+        return httpx.Response(200, json={'choices': [{'message': {'content': '{"observations": []}'}}]})
+
+    def mock_client(provider_id):
+        assert provider_id == 'mai'
+        return httpx.Client(base_url=deepseek.MAI_API_URL, transport=httpx.MockTransport(provider))
+
+    monkeypatch.setattr(deepseek, '_client', mock_client)
+    with client() as session:
+        saved = session.put('/api/settings/mai', json={'api_key': 'sk-mai-test'})
+        assert saved.status_code == 200
+        assert saved.json()['ai'] == {
+            'provider': 'mai', 'label': 'МАИ', 'model': 'deepseek-v4.1-flash', 'configured': True, 'verify_tls': False,
+        }
+        assert 'sk-mai-test' not in saved.text
+        assert session.post('/api/settings/mai/test').json()['status'] == 'ok'
+        response = session.post('/api/audits', files={'files': ('sample.html', HTML)}, data={'ai_analysis': 'true'})
+        assert response.status_code == 201
+        audit_id = response.json()['items'][0]['id']
+        result = session.get(f'/api/audits/{audit_id}').json()['result']['ai']
+        assert result['provider'] == 'mai' and result['status'] == 'ok'
 
 
 def test_recovery_after_interrupted_storage_change(isolated_data):

@@ -20,17 +20,18 @@ export function SettingsPage() {
     return () => controller.abort()
   }, [])
 
+  const provider = settings?.ai
+
   async function save(event?: FormEvent) {
     event?.preventDefault()
     const removing = event === undefined
-    if (busy || (!removing && !apiKey.trim())) return
+    if (!provider || busy || (!removing && !apiKey.trim())) return
     setBusy(removing ? 'remove' : 'save')
     setMessage('')
     setError('')
     try {
-      await request('/settings/deepseek', json('PUT', { api_key: removing ? '' : apiKey.trim() }))
+      const next = await request<Settings>(`/settings/${provider.provider}`, json('PUT', { api_key: removing ? '' : apiKey.trim() }))
       setApiKey('')
-      const next = await request<Settings>('/settings')
       setSettings(next)
       setMessage(removing ? 'Сохранённый ключ удалён.' : 'Ключ сохранён. Проверьте подключение.')
     } catch (reason) {
@@ -41,12 +42,12 @@ export function SettingsPage() {
   }
 
   async function check() {
-    if (busy) return
+    if (!provider || busy) return
     setBusy('test')
     setMessage('')
     setError('')
     try {
-      const result = await request<{ status: string, message: string }>('/settings/deepseek/test', { method: 'POST' })
+      const result = await request<{ status: string, message: string }>(`/settings/${provider.provider}/test`, { method: 'POST' })
       if (['ok', 'success', 'connected'].includes(result.status)) setMessage(result.message)
       else setError(result.message)
     } catch (reason) {
@@ -57,24 +58,25 @@ export function SettingsPage() {
   }
 
   return <>
-    <PageTitle title="Настройки" description="Подключение DeepSeek и источники правовых сведений." />
+    <PageTitle title="Настройки" description="Подключение ИИ и источники правовых сведений." />
     <div className="settings-grid">
       <section className="panel form-panel">
         <div className="setting-heading"><span className="file-icon"><KeyRound size={19} /></span>
-          <div><h2>DeepSeek API</h2><p>{settings ? settings.deepseek_configured ? 'Ключ настроен' : 'Ключ отсутствует' : 'Проверяем настройки…'}{settings?.deepseek_model && ` · ${settings.deepseek_model}`}</p></div>
+          <div><h2>{provider ? `${provider.label} API` : 'Провайдер ИИ'}</h2><p>{provider ? `${provider.configured ? 'Ключ настроен' : 'Ключ отсутствует'} · ${provider.model}` : 'Проверяем настройки…'}</p></div>
         </div>
-        <p className="setting-copy">Создайте ключ в кабинете DeepSeek, сохраните его здесь и проверьте подключение. Локальная проверка доступна без ключа.</p>
-        <a className="text-link" href="https://platform.deepseek.com/api_keys" target="_blank" rel="noreferrer">Получить ключ <ArrowUpRight size={16} /></a>
+        <p className="setting-copy">Сохраните ключ выбранного провайдера и проверьте подключение. Локальная проверка доступна без ключа.</p>
+        {provider && <a className="text-link" href={provider.provider === 'mai' ? 'https://api-ai.mai.ru/#/' : 'https://platform.deepseek.com/api_keys'} target="_blank" rel="noreferrer">Кабинет {provider.label} <ArrowUpRight size={16} /></a>}
+        {provider?.verify_tls === false && <Notice error>Проверка сертификата МАИ отключена. При перехвате соединения третья сторона может получить ключ и данные анализа. Используйте только для тестовых материалов.</Notice>}
         <form onSubmit={save} className="key-form">
-          <label htmlFor="api-key">API-ключ DeepSeek</label>
+          <label htmlFor="api-key">API-ключ {provider?.label}</label>
           <input id="api-key" type="password" value={apiKey} onChange={event => setApiKey(event.target.value)}
-            disabled={Boolean(busy) || !settings} placeholder="Введите новый ключ" autoComplete="off" spellCheck={false} maxLength={256} />
+            disabled={Boolean(busy) || !settings} placeholder="Введите новый ключ" autoComplete="off" spellCheck={false} maxLength={512} />
           <div className="button-group">
             <button className="button button-primary" type="submit" disabled={!apiKey.trim() || Boolean(busy)}>{busy === 'save' && <LoaderCircle className="spinning" size={16} />}Сохранить</button>
-            <button className="button button-secondary" type="button" onClick={check} disabled={!settings?.deepseek_configured || Boolean(busy)}>
+            <button className="button button-secondary" type="button" onClick={check} disabled={!provider?.configured || Boolean(busy)}>
               {busy === 'test' ? <LoaderCircle className="spinning" size={16} /> : <RadioTower size={16} />} Проверить подключение
             </button>
-            {settings?.deepseek_configured && <button className="button button-quiet" type="button" onClick={() => void save()} disabled={Boolean(busy)}>Удалить ключ</button>}
+            {provider?.configured && <button className="button button-quiet" type="button" onClick={() => void save()} disabled={Boolean(busy)}>Удалить ключ</button>}
           </div>
         </form>
         {error && <Notice error>{error}</Notice>}

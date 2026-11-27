@@ -207,11 +207,11 @@ export function AuditDetail({ id, onRerun, onDelete }: { id: number, onRerun: (i
           {legal?.items?.length ? legal.items.map((item, index) => <RegistryItem key={index} item={item} />) : <p className="muted">В отчёте нет сведений из реестров.</p>}
         </section>
         <section className="panel result-panel">
-          <div className="section-heading"><h2>Анализ DeepSeek</h2>{ai && <span className="code-pill">{statusLabel(ai.status)}</span>}</div>
+          <div className="section-heading"><h2>{ai?.provider === 'mai' ? 'Анализ с МАИ' : 'Анализ ИИ'}</h2>{ai && <span className="code-pill">{statusLabel(ai.status)}</span>}</div>
           {ai?.summary && <p>{ai.summary}</p>}
           <BulletList items={ai?.observations?.map(displayValue)} />
           <Warnings lines={ai?.warnings} />
-          {!ai && <p className="muted">В отчёте нет анализа DeepSeek.</p>}
+          {!ai && <p className="muted">В отчёте нет анализа ИИ.</p>}
         </section>
       </div>
     </div>

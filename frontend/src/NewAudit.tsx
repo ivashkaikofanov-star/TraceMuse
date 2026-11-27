@@ -1,8 +1,8 @@
-import { useRef, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import type { DragEvent, FormEvent } from 'react'
 import { ArrowRight, FileText, Globe2, LoaderCircle, LockKeyhole, ScanLine, Upload, X } from 'lucide-react'
 import { describeError, formatSize, request } from './api'
-import type { AuditOptions, AuditSummary, UploadResult } from './api'
+import type { AuditOptions, AuditSummary, Settings, UploadResult } from './api'
 import { Notice, PageTitle } from './ui'
 
 export const localOptions: AuditOptions = { online_search: false, ai_analysis: false, intended_use: 'unspecified' }
@@ -13,6 +13,13 @@ export function AuditConsent({ value, onChange, disabled = false }: {
   onChange: (value: AuditOptions) => void
   disabled?: boolean
 }) {
+  const [provider, setProvider] = useState<Settings['ai']>()
+  useEffect(() => {
+    const controller = new AbortController()
+    request<Settings>('/settings', { signal: controller.signal }).then(data => setProvider(data.ai)).catch(() => {})
+    return () => controller.abort()
+  }, [])
+
   return <fieldset className="consent" disabled={disabled}>
     <legend>Параметры проверки</legend>
     <label className="intended-use">Планируемое использование
@@ -31,9 +38,11 @@ export function AuditConsent({ value, onChange, disabled = false }: {
       <span><strong>Поиск источников онлайн</strong><small>В Wikimedia Commons передаются короткий фрагмент текста, заголовок из метаданных или имя изображения, SHA-256 файла, SHA-1 до двух изображений и имена файлов из ссылок на Commons. Для локального сравнения скачиваются публичные миниатюры Wikimedia.</small></span>
     </label>
     <label className="consent-choice">
-      <input type="checkbox" checked={value.ai_analysis} onChange={event => onChange({ ...value, ai_analysis: event.target.checked })} />
+      <input type="checkbox" disabled={!provider} checked={value.ai_analysis} onChange={event => onChange({ ...value, ai_analysis: event.target.checked })} />
       <ScanLine size={18} />
-      <span><strong>Анализ с DeepSeek</strong><small>DeepSeek получит до 4 000 знаков извлечённого текста и краткие сведения о совпадениях и лицензиях. Ключ можно подключить в <a href="#/settings">настройках</a>.</small></span>
+      <span><strong>{provider ? `Анализ с ${provider.label}` : 'Анализ с ИИ'}</strong>
+        <small>Провайдер получит до 4 000 знаков извлечённого текста и сведения о совпадениях и лицензиях. {provider?.verify_tls === false && 'Проверка сертификата МАИ отключена. '}Ключ можно подключить в <a href="#/settings">настройках</a>.</small>
+      </span>
     </label>
   </fieldset>
 }

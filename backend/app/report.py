@@ -194,8 +194,10 @@ def render_pdf(audit: dict) -> bytes:
     paragraph("Правовые статусы в России", heading)
     findings(result.get("legal") or {})
 
-    paragraph("Пояснения DeepSeek", heading)
+    paragraph("Пояснения ИИ", heading)
     paragraph(f"Статус · {_label(ai.get('status'))}")
+    if ai.get("provider"):
+        paragraph("Провайдер · МАИ" if ai["provider"] == "mai" else "Провайдер · DeepSeek", quiet)
     paragraph(ai.get("summary", ""))
     if ai.get("model"):
         paragraph(ai["model"], quiet)

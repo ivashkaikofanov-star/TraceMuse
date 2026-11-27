@@ -16,9 +16,9 @@ from starlette.formparsers import MultiPartException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
 from .audits import MAX_FILES, AuditUnavailable, delete_audit, get_audit, list_audits, original, recover_uploads, run_audit
-from .config import BACKEND_DIR, settings
+from .config import AIProvider, BACKEND_DIR, settings
 from .db import database_path, init_db
-from .deepseek import is_configured, save_key, test_connection
+from .deepseek import is_configured, provider_label, provider_model, save_key, test_connection, verify_tls
 from .evidence import LEGAL_REGISTRIES
 from .extraction import ExtractionError
 from .report import render_pdf
@@ -61,8 +61,8 @@ class DeepSeekKey(BaseModel):
 
 @app.exception_handler(RequestValidationError)
 async def protect_secret_validation(request: Request, error: RequestValidationError):
-    if request.url.path == '/api/settings/deepseek':
-        return JSONResponse({'detail': 'Проверьте формат ключа DeepSeek.'}, status_code=422)
+    if request.method == 'PUT' and request.url.path.startswith('/api/settings/'):
+        return JSONResponse({'detail': 'Проверьте формат API-ключа.'}, status_code=422)
     return await request_validation_exception_handler(request, error)
 
 
@@ -208,24 +208,27 @@ def pdf_report(audit_id: int):
 
 @app.get('/api/settings')
 def get_settings():
+    provider = settings.ai_provider
     return {'deepseek_configured': is_configured(), 'deepseek_model': settings.deepseek_model,
+            'ai': {'provider': provider, 'label': provider_label(provider), 'model': provider_model(provider),
+                   'configured': is_configured(provider), 'verify_tls': verify_tls(provider)},
             'legal_registries': LEGAL_REGISTRIES}
 
 
-@app.put('/api/settings/deepseek')
-def set_deepseek(body: DeepSeekKey):
+@app.put('/api/settings/{provider}')
+def set_provider_key(provider: AIProvider, body: DeepSeekKey):
     try:
-        save_key(body.api_key.strip())
+        save_key(body.api_key, provider)
     except ValueError:
         raise HTTPException(422, 'Введите API-ключ в виде одной строки без пробелов.') from None
     except OSError:
         raise HTTPException(500, 'Сохранить ключ не удалось. Проверьте доступ к локальному хранилищу.') from None
-    return {'deepseek_configured': is_configured(), 'deepseek_model': settings.deepseek_model}
+    return get_settings()
 
 
-@app.post('/api/settings/deepseek/test')
-def verify_deepseek():
-    return test_connection()
+@app.post('/api/settings/{provider}/test')
+def verify_provider(provider: AIProvider):
+    return test_connection(provider)
 
 
 if (DIST_DIR / 'index.html').is_file():

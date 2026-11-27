@@ -81,6 +81,7 @@ export interface UploadResult {
 export interface Settings {
   deepseek_configured: boolean
   deepseek_model: string
+  ai: { provider: "deepseek" | "mai", label: string, model: string, configured: boolean, verify_tls: boolean }
   legal_registries: Registry[]
 }
 

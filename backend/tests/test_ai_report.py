@@ -17,9 +17,9 @@ from app.report import render_pdf
 
 
 class DeepSeekTests(unittest.TestCase):
-    def mock_client(self, handler):
+    def mock_client(self, handler, base_url=deepseek.API_URL):
         return httpx.Client(
-            base_url=deepseek.API_URL, transport=httpx.MockTransport(handler),
+            base_url=base_url, transport=httpx.MockTransport(handler),
             follow_redirects=False,
         )
 
@@ -52,6 +52,43 @@ class DeepSeekTests(unittest.TestCase):
             self.assertEqual(deepseek.analyze({}, {}, {}, True)["status"], "not_configured")
             self.assertEqual(deepseek.test_connection()["status"], "not_configured")
             client.assert_not_called()
+
+    def test_mai_uses_its_own_key_and_model(self):
+        calls = []
+
+        def provider(request):
+            self.assertEqual(request.url.host, "api-ai.mai.ru")
+            self.assertEqual(request.headers["authorization"], "Bearer sk-test-mai")
+            calls.append(request.url.path)
+            if request.url.path == "/v1/models":
+                return httpx.Response(200, json={"data": [{"id": "deepseek-v4.1-flash"}]})
+            body = json.loads(request.content)
+            self.assertEqual(body["model"], "deepseek-v4.1-flash")
+            self.assertNotIn("thinking", body)
+            return httpx.Response(200, json={"choices": [{"message": {"content": '{"observations": []}'}}]})
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(
+            deepseek, "settings", Settings(_env_file=None, ai_provider="mai", mai_model="deepseek-v4.1-flash")
+        ), patch.object(deepseek, "database_path", return_value=Path(directory) / "test.sqlite3"):
+            deepseek.save_key("sk-test-public")
+            deepseek.save_key("sk-test-mai", "mai")
+            self.assertEqual(deepseek._key(), "sk-test-public")
+            with patch.object(deepseek, "_client", side_effect=lambda _: self.mock_client(provider, deepseek.MAI_API_URL)):
+                self.assertEqual(deepseek.test_connection("mai")["status"], "ok")
+                result = deepseek.analyze({}, {}, {}, True)
+            self.assertEqual(result["status"], "ok")
+            self.assertEqual(result["provider"], "mai")
+            self.assertEqual(calls, ["/v1/models", "/v1/chat/completions"])
+
+    def test_certificate_override_is_limited_to_mai(self):
+        settings = Settings(_env_file=None, mai_tls_verify=False)
+        with patch.object(deepseek, "settings", settings), patch("app.deepseek.httpx.Client") as client:
+            deepseek._client("mai")
+            self.assertEqual(client.call_args.kwargs["base_url"], deepseek.MAI_API_URL)
+            self.assertFalse(client.call_args.kwargs["verify"])
+            self.assertFalse(client.call_args.kwargs["follow_redirects"])
+            deepseek._client("deepseek")
+            self.assertTrue(client.call_args.kwargs["verify"])
 
     def test_flash_catalog_accepts_default_and_legacy_settings(self):
         def provider(request):

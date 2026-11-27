@@ -1,7 +1,10 @@
 from pathlib import Path
+from typing import Literal
 
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+AIProvider = Literal["deepseek", "mai"]
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
 
@@ -10,6 +13,10 @@ class Settings(BaseSettings):
     app_env: str = "development"
     database_path: str = "data/tracemuse.sqlite3"
     max_upload_mb: int = Field(default=100, ge=1, le=200)
+    ai_provider: AIProvider = "deepseek"
+    mai_api_key: SecretStr = SecretStr("")
+    mai_model: str = "deepseek-v4.1-flash"
+    mai_tls_verify: bool = True
     deepseek_api_key: SecretStr = SecretStr("")
     deepseek_model: str = "deepseek-flash"
     legal_snapshot_path: str = ""
