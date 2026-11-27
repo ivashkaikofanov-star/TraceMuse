@@ -18,7 +18,8 @@ from .extraction import image_phash
 COMMONS_HOST = "commons.wikimedia.org"
 COMMONS_API = f"https://{COMMONS_HOST}/w/api.php"
 THUMBNAIL_HOSTS = {"thumb.wikimedia.org", "upload.wikimedia.org"}
-SOURCE_RANK = {"identical_image": 0, "visual_similarity": 1, "commons_link": 2, "catalog_candidate": 3}
+SOURCE_RANK = {"identical_image": 0, "brand_visual": 1, "brand_text": 2,
+               "visual_similarity": 3, "commons_link": 4, "catalog_candidate": 5}
 HTTP_HEADERS = {"User-Agent": "TraceMuse/0.2 (https://github.com/ivashkaikofanov-star/TraceMuse)"}
 REGISTRIES = {
     "foreign_agents": (
@@ -51,6 +52,12 @@ LEGAL_REGISTRIES = [{"id": key, "title": title, "url": url} for key, (title, url
 
 AUDIT_CAVEAT = "Совпадение имени, названия или домена само по себе не определяет применимость запрета или маркировки."
 COMMONS_CAVEAT = "Wikimedia Commons охватывает только свой каталог. Совпадение не удостоверяет первоисточник или правообладателя."
+BRAND_NAMES = (
+    ("Coca-Cola", r"(?<!\w)(?:coca[\s\-‑–]+cola|кока[\s\-‑–]+кол[аыеуой]+)(?!\w)",
+     "https://www.coca-cola.com/us/en/brands/coca-cola"),
+    ("Pepsi", r"(?<!\w)(?:pepsi|пепси)(?!\w)", "https://www.pepsi.com/"),
+    ("adidas", r"(?<!\w)(?:adidas|адидас)(?!\w)", "https://www.adidas.com/"),
+)
 
 
 class PlainText(HTMLParser):
@@ -177,14 +184,14 @@ def _quote_query(text):
 
 
 def _query_phrase(extraction):
+    for line in extraction.get("text", "")[:1800].splitlines():
+        if (usable := _quote_query(line)) and len(usable) >= 5:
+            return usable
     meta = extraction.get("metadata", {})
     for key, value in meta.items():
         if str(key).casefold() in {"title", "subject", "dc:title", "description", "заголовок"} and isinstance(value, str):
             if usable := _quote_query(value):
                 return usable
-    for line in extraction.get("text", "")[:1800].splitlines():
-        if usable := _quote_query(line):
-            return usable
     for image in extraction.get("images", [])[:4]:
         basename = str(image.get("name") or "").replace("\\", "/").rsplit("/", maxsplit=1)[-1]
         title = _quote_query(re.sub(r"[_-]+", " ", Path(basename).stem))
@@ -236,7 +243,8 @@ def _record_candidate(records, checked, page, match, confidence, method, *, info
     url = _file_url(title)
     if url in records and SOURCE_RANK[records[url]["method"]] <= SOURCE_RANK[method]:
         return
-    info = info if info is not None else next(iter(page.get("imageinfo", [])), {})
+    if method == "commons_link":
+        info = next(iter(page.get("imageinfo", [])), {})
     records[url] = _source(checked, title.removeprefix("File:"), url, match, confidence,
                            info=info, method=method, query=query)
 
@@ -285,15 +293,20 @@ def _visual_matches(client, checked, deadline, candidates, records, images, warn
 
 def search_sources(extraction: dict, sha256: str, enabled: bool) -> dict:
     checked = datetime.now(UTC).isoformat()
+    brand_signals = _brand_signals(extraction, checked)
     embedded = {}
     for url in extraction.get("links", [])[:50]:
         if parsed := _http_url(url):
             embedded[url] = _source(checked, parsed.hostname, url, "Ссылка из материала",
                                     "Страница и связь с первоисточником не проверены", method="embedded_url")
     warnings = [COMMONS_CAVEAT]
+    if extraction.get("images"):
+        warnings.append("Локальный каталог логотипов охватывает образцы Pepsi, adidas и Coca-Cola.")
+    if brand_signals:
+        warnings.append("Справочные признаки бренда помогают опознать обозначение. Они не подтверждают происхождение вашего файла или право использовать знак.")
     if not enabled:
         warnings.append("Пользователь не включил поиск в Wikimedia Commons.")
-        return {"status": "local_only", "items": list(embedded.values()), "warnings": warnings}
+        return {"status": "local_only", "items": brand_signals + list(embedded.values()), "warnings": warnings}
 
     images = extraction.get("images", [])[:24]
     hashes = {}
@@ -317,7 +330,7 @@ def search_sources(extraction: dict, sha256: str, enabled: bool) -> dict:
                                         "gsrlimit": 3, "prop": "imageinfo", "iiprop": "extmetadata"}, term, None))
     if not requests:
         warnings.append("В материале недостаточно данных для запроса к каталогу.")
-        return {"status": "no_match", "items": list(embedded.values()), "warnings": warnings}
+        return {"status": "no_match", "items": brand_signals + list(embedded.values()), "warnings": warnings}
 
     deadline = monotonic() + 9.0
     records, candidates = {}, []
@@ -355,17 +368,46 @@ def search_sources(extraction: dict, sha256: str, enabled: bool) -> dict:
                 warnings.append("Публичные миниатюры для визуального сравнения недоступны.")
     if completed < len(requests):
         warnings.append(f"Wikimedia Commons вернула пригодный ответ на {completed} из {len(requests)} запросов.")
+    candidates_without_match = [url for url, record in records.items() if record["method"] == "catalog_candidate"]
+    for url in candidates_without_match:
+        del records[url]
+    if candidates_without_match:
+        warnings.append("Текстовые результаты без подтверждённого совпадения исключены. Их лицензии к проверяемому материалу не применялись.")
+
     status = "unavailable"
     if completed:
         status = "partial" if completed < len(requests) else "complete"
         if not records and status == "complete":
             status = "no_match"
     if status == "no_match":
-        warnings.append("Каталог не вернул совпадений по выполненным запросам.")
+        warnings.append("В проверенных результатах Wikimedia Commons не удалось установить совпадение с материалом.")
 
-    sorted_sources = sorted(records.values(), key=lambda source: SOURCE_RANK[source["method"]])
-    return {"status": status, "items": sorted_sources + [source for url, source in embedded.items() if url not in records],
+    sorted_sources = sorted([*records.values(), *brand_signals], key=lambda source: SOURCE_RANK[source["method"]])
+    seen = {source["url"] for source in sorted_sources}
+    return {"status": status, "items": sorted_sources + [source for url, source in embedded.items() if url not in seen],
             "warnings": warnings}
+
+
+def _brand_signals(extraction, checked):
+    visual, seen_brands = {}, set()
+    for image in extraction.get("images", []):
+        for reference in image.get("logo_references", []):
+            location = f" · {image['location']}" if image.get("location") else ""
+            part = "фрагмент изображения" if reference["part"] else "изображение"
+            visual.setdefault(reference["url"], _source(
+                checked, reference["title"], reference["url"],
+                f"По форме сопоставлен {part} «{image['name']}»{location}.",
+                "Визуальное сходство со справочным образцом", method="brand_visual",
+            ))
+            seen_brands.add(reference["brand"])
+
+    text = extraction.get("text", "")
+    mentions = []
+    for brand, pattern, url in BRAND_NAMES:
+        if brand not in seen_brands and (match := re.search(pattern, text, re.IGNORECASE)):
+            mentions.append(_source(checked, brand, url, f"В извлечённом тексте найдено «{match[0]}».",
+                                    "Подтверждено текстом документа", method="brand_text"))
+    return [*visual.values(), *mentions]
 
 
 def _normalized(value):

@@ -1,0 +1,49 @@
+[
+  {
+    "brand": "adidas",
+    "title": "adidas · три полосы",
+    "url": "https://commons.wikimedia.org/wiki/File:Adidas_2022_logo.svg",
+    "shape": "0000080000001c0000003c0000007c000000fe000001fe000001fe000001ff000001ff000000ff000000ff800000ff80000c7f80001e7fc0003e3fc0007e3fc000ff3fe000ff1fe000ff1fe000ff9ff000ff8ff0007f8ff0007fcff8063fc7f80e3fc7f81f3fe7fc3f1fe3fc7f1fe3fcff9ff3feff8ff1fe7f8ff1ff7fcff9ff",
+    "aspect": 1.684,
+    "colors": []
+  },
+  {
+    "brand": "adidas",
+    "title": "adidas · трилистник",
+    "url": "https://commons.wikimedia.org/wiki/File:Adidas_trefoil_logo.svg",
+    "shape": "0000000000018000000180000003c0000003c0000007e0000007e0000007e0000007e000c00ff003f00ff00ff80ff01ffe0ff07fff0ff0ffff0ff0ff7f8ff1fe7fcff3fe7fcff3fe7feff7fc00000000000000001ffffff81ffffff8000000000000000007ffffe0000000000000000000ffff00007dbe00003dbc0000002000",
+    "aspect": 1.429,
+    "colors": []
+  },
+  {
+    "brand": "Coca-Cola",
+    "title": "Coca-Cola · логотип",
+    "url": "https://commons.wikimedia.org/wiki/File:Coca-Cola_logo.svg",
+    "shape": "0200058006000fcc0c000ac80a001c681a0010721a0030361000303c3000203c3266e020226f6020246b402064ac484064b4c8406f94c0404b94804049948040c928b28cc929b4dcd929a4d4d96dc4b8dd7d4ca899f94fa899b94ba8800159288001197880011950c0e13950c1f11d50c7f95df86c79d9f07021995000000000",
+    "aspect": 3.199,
+    "colors": [
+      "red"
+    ]
+  },
+  {
+    "brand": "Pepsi",
+    "title": "Pepsi · круглый знак образца 2014 года",
+    "url": "https://commons.wikimedia.org/wiki/File:Pepsi_logo_%282014%29.svg",
+    "shape": "001ff800007ffe0001ffff8003ffffc007ffff800fffff801fffff003fffff003fffff007ffffe027ffffc02fffffc02fffff803fffff007fffff007ffffe007ffffc00fffff801fffff003ffffe007ffff800fe7ff003fe7fc03ffe3f03fffc3c3ffffc03fffff80ffffff007ffffe003ffffc001ffff80007ffe00000ff000",
+    "aspect": 1.0,
+    "colors": [
+      "red",
+      "blue"
+    ]
+  },
+  {
+    "brand": "Pepsi",
+    "title": "Pepsi · круглый знак образца 2023 года",
+    "url": "https://commons.wikimedia.org/wiki/File:Pepsi_2023.svg",
+    "shape": "000ff00000600600019ff980027ffe4005ffffa00bffffd017ffffe82ffffff42ffffff45ffffffa5ffe000200000000800000019f7df3c99b61bed99b79bf999f79f1d9987dc6f9987d87d9800000010000000040007ffa5ffffffa2ffffff42ffffff417ffffe80bffffd005ffffa0027ffe40019ff98000600600000ff000",
+    "aspect": 1.0,
+    "colors": [
+      "red"
+    ]
+  }
+]

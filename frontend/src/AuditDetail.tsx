@@ -81,16 +81,18 @@ function Extracted({ data }: { data: Extraction }) {
 
 function SourceItem({ item }: { item: Source }) {
   const license = item.license
+  const brandReference = item.method === 'brand_visual' || item.method === 'brand_text'
   const rights = [item.creator ? ['Автор по данным источника', item.creator] : null, item.rightsholder ? ['Правообладатель', displayValue(item.rightsholder)] : null]
   return <article className="evidence-item">
     <h3><ExternalLink url={item.url}>{item.title || item.url}</ExternalLink></h3>
+    {brandReference && <small>Справка о бренде</small>}
     {item.match && <p>{item.match}</p>}
     <div className="evidence-meta">
       {item.confidence && <span>Уверенность: {statusLabel(item.confidence)}</span>}
       {item.checked_at && <span>{formatDate(item.checked_at)}</span>}
     </div>
     <dl className="fact-grid">
-      <div><dt>Лицензия</dt><dd>{!license ? 'Не установлена' : typeof license === 'string' ? license :
+      <div><dt>{brandReference ? 'Права на материал' : 'Лицензия'}</dt><dd>{!license ? (brandReference ? 'Не установлены' : 'Не установлена') : typeof license === 'string' ? license :
         <>{license.url ? <ExternalLink url={license.url}>{license.name}</ExternalLink> : license.name}{license.status && <small>{statusLabel(license.status)}</small>}</>}</dd></div>
       {rights.map(pair => pair && <div key={pair[0]}><dt>{pair[0]}</dt><dd>{pair[1]}</dd></div>)}
       {typeof license === 'object' && license && <>
@@ -195,7 +197,7 @@ export function AuditDetail({ id, onRerun, onDelete }: { id: number, onRerun: (i
       {result?.extraction && <Extracted data={result.extraction} />}
       <div className="results-stack">
         <section className="panel result-panel">
-          <div className="section-heading"><h2>Источники и лицензии</h2>{sources && <span className="code-pill">{statusLabel(sources.status)}</span>}</div>
+          <div className="section-heading"><h2>Источники и лицензии</h2>{sources && <span className="code-pill">{sources.status === 'local_only' ? statusLabel(sources.status) : `Commons · ${statusLabel(sources.status)}`}</span>}</div>
           <Warnings lines={sources?.warnings} />
           {sources?.items?.length ? sources.items.map((item, index) => <SourceItem key={index} item={item} />) : <p className="muted">В отчёте нет источников.</p>}
         </section>
