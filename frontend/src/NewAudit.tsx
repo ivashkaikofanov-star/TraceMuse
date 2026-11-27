@@ -13,10 +13,11 @@ export function AuditConsent({ value, onChange, disabled = false }: {
   onChange: (value: AuditOptions) => void
   disabled?: boolean
 }) {
-  const [provider, setProvider] = useState<Settings['ai']>()
+  const [settings, setSettings] = useState<Settings>()
+  const provider = settings?.ai
   useEffect(() => {
     const controller = new AbortController()
-    request<Settings>('/settings', { signal: controller.signal }).then(data => setProvider(data.ai)).catch(() => {})
+    request<Settings>('/settings', { signal: controller.signal }).then(setSettings).catch(() => {})
     return () => controller.abort()
   }, [])
 
@@ -25,7 +26,8 @@ export function AuditConsent({ value, onChange, disabled = false }: {
     <label className="intended-use">Планируемое использование
       <select value={value.intended_use ?? 'unspecified'} onChange={event => onChange({ ...value, intended_use: event.target.value as AuditOptions['intended_use'] })}>
         <option value="unspecified">Не определено</option>
-        <option value="commercial">Коммерческое использование</option>
+        <option value="noncommercial">Некоммерческое использование без изменений</option>
+        <option value="commercial">Коммерческое использование без изменений</option>
         <option value="redistribute_modified">Распространение изменённой версии</option>
         <option value="commercial_modified">Коммерческое использование изменённой версии</option>
       </select>
@@ -33,15 +35,20 @@ export function AuditConsent({ value, onChange, disabled = false }: {
     <h3>Внешние сервисы</h3>
     <p>Включайте эти параметры, если согласны передать указанные данные. При выключенных параметрах файл обрабатывается локально.</p>
     <label className="consent-choice">
-      <input type="checkbox" checked={value.online_search} onChange={event => onChange({ ...value, online_search: event.target.checked })} />
+      <input type="checkbox" checked={value.online_search} onChange={event => onChange({ ...value, online_search: event.target.checked, reverse_search: event.target.checked && value.reverse_search })} />
       <Globe2 size={18} />
-      <span><strong>Поиск источников онлайн</strong><small>В Wikimedia Commons передаются короткий фрагмент текста, заголовок из метаданных или имя изображения, SHA-256 файла, SHA-1 до двух изображений и имена файлов из ссылок на Commons. Для локального сравнения скачиваются публичные миниатюры Wikimedia.</small></span>
+      <span><strong>Поиск источников онлайн</strong><small>В Wikimedia Commons отправляются хеши изображений и поисковые запросы по тексту, названиям и описаниям из материала. TraceMuse сверяет источники и подбирает открытые альтернативы.</small></span>
     </label>
+    {settings?.reverse_search_configured && <label className="consent-choice">
+      <input type="checkbox" checked={Boolean(value.reverse_search)} disabled={!value.online_search} onChange={event => onChange({ ...value, reverse_search: event.target.checked })} />
+      <ScanLine size={18} />
+      <span><strong>Обратный поиск изображений</strong><small>До шести уменьшенных копий изображений отправятся в Google Cloud Vision. Сервис ищет страницы, на которых они встречаются.</small></span>
+    </label>}
     <label className="consent-choice">
       <input type="checkbox" disabled={!provider} checked={value.ai_analysis} onChange={event => onChange({ ...value, ai_analysis: event.target.checked })} />
       <ScanLine size={18} />
       <span><strong>{provider ? `Анализ с ${provider.label}` : 'Анализ с ИИ'}</strong>
-        <small>Провайдер получит до 4 000 знаков извлечённого текста и сведения о совпадениях и лицензиях. {provider?.verify_tls === false && 'Проверка сертификата МАИ отключена. '}Ключ можно подключить в <a href="#/settings">настройках</a>.</small>
+        <small>Провайдер получит краткие фрагменты текста, названия, контекст слайдов и сведения о кандидатах. При включённом онлайн-поиске модель составит запросы и поможет выбрать замены. {provider?.verify_tls === false && 'Проверка сертификата МАИ отключена. '}Ключ можно подключить в <a href="#/settings">настройках</a>.</small>
       </span>
     </label>
   </fieldset>
@@ -110,6 +117,7 @@ export function NewAudit({ maxUploadMb, maxFiles = 10, onOpen }: {
     files.forEach(file => data.append('files', file))
     data.append('online_search', String(options.online_search))
     data.append('ai_analysis', String(options.ai_analysis))
+    if (options.reverse_search) data.append('reverse_search', 'true')
     if (options.intended_use) data.append('intended_use', options.intended_use)
     setBusy(true)
     setIssues([])

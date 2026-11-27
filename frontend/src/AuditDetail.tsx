@@ -4,6 +4,7 @@ import { describeError, formatDate, formatSize, json, request, safeHref, statusL
 import type { Audit, AuditSummary, Extraction, Registry, Source } from './api'
 import { Notice, PageTitle, Risk } from './ui'
 import { AuditConsent, localOptions } from './NewAudit'
+import { ImageReviewSection } from './ImageReview'
 
 function ExternalLink({ url, children }: { url: string, children: React.ReactNode }) {
   const href = safeHref(url)
@@ -179,6 +180,7 @@ export function AuditDetail({ id, onRerun, onDelete }: { id: number, onRerun: (i
   return <>
     {back}
     <PageTitle title={audit.filename} description={`Проверка №${audit.id} · ${formatDate(audit.created_at)} · ${statusLabel(audit.status)}`} actions={downloadButtons} />
+    {result?.image_review && <ImageReviewSection review={result.image_review} />}
     <section className="panel result-panel verdict">
       <div className="section-heading"><h2>Оценка риска</h2><Risk value={assessment?.level ?? audit.risk_level} /></div>
       <p>{assessment?.reason ?? 'По этой проверке оценка риска отсутствует.'}</p>

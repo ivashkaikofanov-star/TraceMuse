@@ -5,6 +5,7 @@ import binascii
 import hashlib
 import io
 import math
+import posixpath
 import re
 import stat
 import statistics
@@ -55,7 +56,7 @@ class ExtractionError(ValueError):
 
 
 class Result:
-    def __init__(self, kind: str):
+    def __init__(self, kind: str, previews: dict[str, bytes] | None = None):
         self.kind = kind
         self.text: list[str] = []
         self.text_length = 0
@@ -64,6 +65,7 @@ class Result:
         self.images: list[dict] = []
         self.warnings: list[str] = []
         self.entries: list[dict] | None = None
+        self.previews = previews
 
     def warn(self, message: str) -> None:
         if message not in self.warnings and len(self.warnings) < MAX_WARNINGS:
@@ -185,7 +187,12 @@ def image_phash(image: Image.Image) -> str:
     return f'{int(signature, 2):016x}'
 
 
-def _image_record(stream: BinaryIO, name: str, expected: str | None = None) -> dict:
+def pixel_hash(image: Image.Image) -> str:
+    return hashlib.sha256(struct.pack('>II', *image.size) + image.convert('RGBA').tobytes()).hexdigest()
+
+
+def _image_record(stream: BinaryIO, name: str, expected: str | None = None,
+                  previews: dict[str, bytes] | None = None) -> dict:
     record = {
         'name': name,
         'sha256': _digest(stream, 'sha256'),
@@ -204,8 +211,20 @@ def _image_record(stream: BinaryIO, name: str, expected: str | None = None) -> d
     with Image.open(stream, formats=formats) as image:
         record['phash'] = image_phash(image)
         record['phash_algorithm'] = 'dct64'
+        if width * height <= 2_000_000:
+            record['pixel_sha256'] = pixel_hash(image)
         if matches := identify_graphics(image, split=True):
             record['logo_references'] = matches
+        if previews is not None and len(previews) < 6 and record['sha256'] not in previews:
+            if min(width, height) >= 64:
+                scale = min(1, 640 / max(image.size))
+                size = tuple(max(1, round(dim * scale)) for dim in image.size)
+                preview = image.resize(size, Image.Resampling.LANCZOS).convert('RGBA')
+                background = Image.new('RGB', preview.size, 'white')
+                background.paste(preview, mask=preview.getchannel('A'))
+                with io.BytesIO() as buffer:
+                    background.save(buffer, format='JPEG', quality=86)
+                    previews[record['sha256']] = buffer.getvalue()
         if expected:
             record['metadata'] = {
                 label: _short(image.info[field])
@@ -222,12 +241,12 @@ def _image_record(stream: BinaryIO, name: str, expected: str | None = None) -> d
     return record
 
 
-def _add_embedded_image(data: bytes, name: str, result: Result, **context: str) -> None:
+def _add_embedded_image(data: bytes, name: str, result: Result, **context) -> None:
     if len(result.images) >= MAX_IMAGES:
         result.warn('Достигнут предел сохранённых изображений.')
         return
     try:
-        record = _image_record(io.BytesIO(data), name)
+        record = _image_record(io.BytesIO(data), name, previews=result.previews)
     except (OSError, ValueError, SyntaxError, Image.DecompressionBombError):
         record = {'name': name, 'sha256': hashlib.sha256(data).hexdigest(), 'sha1': hashlib.sha1(data).hexdigest()}
         if PurePosixPath(name).suffix.lower() not in {'.svg', '.wmf', '.emf'}:
@@ -510,6 +529,51 @@ def _slide_order(archive: Archive, main_part, slides: list[str]) -> list[str]:
     return ordered + [name for name in slides if name not in ordered]
 
 
+def _slide_region(picture, slide_size: tuple[int, int]) -> str:
+    transform = next((node for node in picture.iter() if _local(node.tag) == 'xfrm'), None)
+    if transform is None or min(slide_size) <= 0:
+        return ''
+    parts = {_local(node.tag): node.attrib for node in transform}
+    try:
+        x = (int(parts['off']['x']) + int(parts['ext']['cx']) / 2) / slide_size[0]
+        y = (int(parts['off']['y']) + int(parts['ext']['cy']) / 2) / slide_size[1]
+    except (KeyError, ValueError, OverflowError):
+        return ''
+    if not (0 <= x <= 1 and 0 <= y <= 1):
+        return ''
+    horizontal = 'слева' if x < 1 / 3 else 'справа' if x > 2 / 3 else 'по центру'
+    vertical = 'сверху' if y < 1 / 3 else 'снизу' if y > 2 / 3 else 'посередине'
+    return f'{horizontal}, {vertical}'
+
+
+def _slide_images(archive: Archive, name: str, slide, number: int, context: str,
+                  slide_size: tuple[int, int]) -> list[tuple[str, dict]]:
+    part = PurePosixPath(name)
+    rels = _relationships(archive, str(part.parent / '_rels' / (part.name + '.rels')))
+    targets = {}
+    for relation in rels:
+        if relation.get('Type', '').endswith('/image') and relation.get('TargetMode', '').lower() != 'external':
+            raw = relation.get('Target', '')
+            target = posixpath.normpath(raw.lstrip('/') if raw.startswith('/') else str(part.parent / raw))
+            if target.startswith('ppt/media/') and target in archive.members:
+                targets[relation.get('Id')] = target
+    uses = []
+    shape_tree = next((node for node in slide.iter() if _local(node.tag) == 'spTree'), None)
+    direct_pictures = set(shape_tree) if shape_tree is not None else set()
+    for element, picture in enumerate((node for node in slide.iter() if _local(node.tag) == 'pic'), start=1):
+        properties = next((node for node in picture.iter() if _local(node.tag) == 'cNvPr'), None)
+        description = _short(properties.get('descr') or properties.get('title') or '') if properties is not None else ''
+        for node in picture.iter():
+            if _local(node.tag) != 'blip':
+                continue
+            embed = next((value for attr, value in node.attrib.items() if _local(attr) == 'embed'), None)
+            if embed in targets:
+                uses.append((targets[embed], {'location': f'Слайд {number}', 'element': element,
+                                              'context': context, 'description': description,
+                                              'region': _slide_region(picture, slide_size) if picture in direct_pictures else ''}))
+    return uses
+
+
 def _read_office(stream: BinaryIO, result: Result, budget: ReadBudget) -> None:
     if result.kind == 'DOCX':
         prefix, main, root_tag = 'word', 'word/document.xml', 'document'
@@ -529,18 +593,32 @@ def _read_office(stream: BinaryIO, result: Result, budget: ReadBudget) -> None:
         if _local(main_part.tag) != root_tag:
             raise ExtractionError(f'Повреждена основная часть {result.kind}.')
         parts = [name for name in archive.members if part_pattern.fullmatch(name)]
+        slide_size = (0, 0)
         if result.kind == 'DOCX':
             parts.insert(0, main)
         else:
             parts.sort(key=lambda name: int(part_pattern.fullmatch(name).group(1)))
             parts = _slide_order(archive, main_part, parts)
             result.metadata['slides'] = len(parts)
-        for name in parts:
+            size = next((node.attrib for node in main_part if _local(node.tag) == 'sldSz'), {})
+            try:
+                slide_size = (int(size['cx']), int(size['cy']))
+            except (KeyError, ValueError):
+                pass
+        placements = {}
+        for number, name in enumerate(parts, start=1):
             try:
                 part = main_part if name == main else archive.xml(name)
+                text_start = len(result.text)
                 for element in part.iter():
                     if _local(element.tag) == 'p':
                         result.add_text(''.join(node.text or '' for node in element.iter() if _local(node.tag) in {'t', 'instrText'}))
+                if result.kind == 'PPTX':
+                    context = ' '.join(result.text[text_start:])[:360]
+                    for target, placement in _slide_images(archive, name, part, number, context, slide_size):
+                        locations = placements.setdefault(target, [])
+                        if len(locations) < MAX_PDF_PAGES and placement not in locations:
+                            locations.append(placement)
             except (ExtractionError, ParseError, DefusedXmlException):
                 result.warn(f'Не удалось прочитать часть документа «{name}».')
         for name in archive.members:
@@ -553,7 +631,8 @@ def _read_office(stream: BinaryIO, result: Result, budget: ReadBudget) -> None:
                     if len(result.images) >= MAX_IMAGES:
                         result.warn('Достигнут предел сохранённых изображений.')
                     else:
-                        _add_embedded_image(archive.read(name), PurePosixPath(name).name, result, location=name)
+                        _add_embedded_image(archive.read(name), PurePosixPath(name).name, result,
+                                            location=name, **({'placements': placements[name]} if name in placements else {}))
             except (ExtractionError, ParseError, DefusedXmlException, zipfile.BadZipFile, RuntimeError, NotImplementedError):
                 result.warn(f'Не удалось прочитать часть документа «{name}».')
         for name in ('docProps/core.xml', 'docProps/app.xml'):
@@ -600,8 +679,11 @@ def _read_pdf(stream: BinaryIO, result: Result) -> None:
     if page_count > MAX_PDF_PAGES:
         result.warn(f'Обработаны первые {MAX_PDF_PAGES} страниц PDF.')
     for page_number, page in enumerate(reader.pages[:MAX_PDF_PAGES], start=1):
+        context = ''
         try:
-            result.add_text(page.extract_text() or '')
+            text = page.extract_text() or ''
+            result.add_text(text)
+            context = WHITESPACE.sub(' ', text[:1200]).strip()[:360]
         except PDF_ERRORS:
             result.warn(f'Не удалось извлечь текст со страницы {page_number}.')
         try:
@@ -627,7 +709,8 @@ def _read_pdf(stream: BinaryIO, result: Result) -> None:
             try:
                 image = page.images[key]
                 if len(image.data) <= MAX_ENTRY:
-                    _add_embedded_image(image.data, image.name, result, location=f'Страница {page_number}', hash_origin='pdf_export')
+                    _add_embedded_image(image.data, image.name, result, location=f'Страница {page_number}',
+                                        context=context, hash_origin='pdf_export')
                 else:
                     result.warn(f'Размер изображения на странице {page_number} превышает предел чтения.')
             except PDF_ERRORS + (AttributeError, Image.DecompressionBombError):
@@ -658,7 +741,7 @@ def _read_zip(stream: BinaryIO, result: Result, budget: ReadBudget) -> None:
             try:
                 data = archive.read(info.filename)
                 entry['sha256'] = hashlib.sha256(data).hexdigest()
-                child = _extract(io.BytesIO(data), info.filename, child_kind, budget)
+                child = _extract(io.BytesIO(data), info.filename, child_kind, budget, result.previews)
             except (ExtractionError, zipfile.BadZipFile, RuntimeError, NotImplementedError) as error:
                 entry['status'] = 'skipped'
                 entry['message'] = str(error) if isinstance(error, ExtractionError) else 'Не удалось прочитать элемент архива.'
@@ -673,19 +756,21 @@ def _read_zip(stream: BinaryIO, result: Result, budget: ReadBudget) -> None:
                 result.add_link(link)
             for image in child.images:
                 location = image.get('location')
-                result.add_image(image | {'location': f'{info.filename} · {location}' if location else info.filename})
+                placements = [{**item, 'location': f"{info.filename} · {item['location']}"} for item in image.get('placements', [])]
+                result.add_image(image | {'location': f'{info.filename} · {location}' if location else info.filename,
+                                          **({'placements': placements} if placements else {})})
             for warning in child.warnings:
                 result.warn(f'{info.filename}: {warning}')
 
 
-def _extract(stream: BinaryIO, name: str, kind: str, budget: ReadBudget) -> Result:
+def _extract(stream: BinaryIO, name: str, kind: str, budget: ReadBudget, previews: dict[str, bytes] | None = None) -> Result:
     if not stream.read(1):
         raise ExtractionError('Невозможно извлечь содержимое пустого файла.')
     stream.seek(0)
-    result = Result(kind)
+    result = Result(kind, previews)
     try:
         if kind in RASTER:
-            record = _image_record(stream, name, kind)
+            record = _image_record(stream, name, kind, previews)
             result.metadata.update(record.pop('metadata'))
             if record.pop('metadata_warning', None):
                 result.warn('Часть EXIF не удалось прочитать.')
@@ -713,13 +798,13 @@ def _extract(stream: BinaryIO, name: str, kind: str, budget: ReadBudget) -> Resu
     return result
 
 
-def extract(path: Path, filename: str) -> dict:
+def extract(path: Path, filename: str, *, previews: dict[str, bytes] | None = None) -> dict:
     """Inspect a file stored locally under a server-controlled name."""
     kind = EXTENSIONS.get(Path(filename).suffix.lower())
     if not kind:
         raise ExtractionError('Формат файла не поддерживается.')
     with path.open('rb') as stream:
-        result = _extract(stream, filename, kind, ReadBudget())
+        result = _extract(stream, filename, kind, ReadBudget(), previews)
         serialized = result.serialize()
         serialized['sha256'] = _digest(stream, 'sha256')
         serialized['size'] = path.stat().st_size

@@ -104,7 +104,9 @@ def _http_url(url, *, host=None):
 
 
 def _catalog_meta(info, key):
-    return info.get("extmetadata", {}).get(key, {}).get("value", "")
+    metadata = info.get("extmetadata")
+    field = metadata.get(key) if isinstance(metadata, dict) else None
+    return field.get("value", "") if isinstance(field, dict) else ""
 
 
 def _license(info):
@@ -229,7 +231,10 @@ def _query(client, deadline, params):
 
 def _pages(query):
     results = query.get("pages", {})
-    return sorted((item for item in results.values() if "title" in item), key=lambda item: item.get("index", 0))
+    if not isinstance(results, dict):
+        return []
+    valid = (item for item in results.values() if isinstance(item, dict) and isinstance(item.get("title"), str))
+    return sorted(valid, key=lambda item: item["index"] if isinstance(item.get("index"), int) else 0)
 
 
 def _file_url(title):

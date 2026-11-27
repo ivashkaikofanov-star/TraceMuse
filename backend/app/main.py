@@ -28,7 +28,7 @@ LOCAL_HOSTS = ['localhost', '127.0.0.1', '[::1]']
 DEV_ORIGINS = ['http://localhost:5173', 'http://127.0.0.1:5173']
 BODY_LIMIT_MESSAGE = 'Общий размер загрузки превышает допустимый предел.'
 DIST_DIR = BACKEND_DIR.parent / 'frontend' / 'dist'
-IntendedUse = Literal['unspecified', 'commercial', 'redistribute_modified', 'commercial_modified']
+IntendedUse = Literal['unspecified', 'noncommercial', 'commercial', 'redistribute_modified', 'commercial_modified']
 
 
 @asynccontextmanager
@@ -52,6 +52,7 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=LOCAL_HOSTS)
 class AuditOptions(BaseModel):
     online_search: StrictBool = False
     ai_analysis: StrictBool = False
+    reverse_search: StrictBool = False
     intended_use: IntendedUse = 'unspecified'
 
 
@@ -97,7 +98,8 @@ def _run_batch(files: list[UploadFile], options: AuditOptions) -> dict:
     for file in files:
         filename = file.filename or ''
         try:
-            items.append(run_audit(file.file, filename, options.online_search, options.ai_analysis, options.intended_use))
+            items.append(run_audit(file.file, filename, options.online_search, options.ai_analysis,
+                                   options.intended_use, options.reverse_search))
         except ExtractionError as exc:
             errors.append({'filename': filename, 'message': str(exc)})
         except Exception as exc:
@@ -112,6 +114,7 @@ def _run_batch(files: list[UploadFile], options: AuditOptions) -> dict:
             'files': {'type': 'array', 'maxItems': MAX_FILES, 'items': {'type': 'string', 'format': 'binary'}},
             'online_search': {'type': 'boolean', 'default': False},
             'ai_analysis': {'type': 'boolean', 'default': False},
+            'reverse_search': {'type': 'boolean', 'default': False},
             'intended_use': {'type': 'string', 'enum': list(get_args(IntendedUse)), 'default': 'unspecified'},
         },
     }}}},
@@ -139,7 +142,7 @@ async def create_audits(request: Request):
 
     bounded_request = Request(request.scope, receive=bounded_receive)
     try:
-        async with bounded_request.form(max_files=MAX_FILES, max_fields=3, max_part_size=1024) as form:
+        async with bounded_request.form(max_files=MAX_FILES, max_fields=4, max_part_size=1024) as form:
             files = form.getlist('files')
             if not files or not all(isinstance(file, UploadFile) for file in files):
                 raise HTTPException(400, 'Выберите хотя бы один файл для проверки.')
@@ -149,9 +152,11 @@ async def create_audits(request: Request):
                 raise HTTPException(400, 'Параметры проверки можно передать один раз.')
             if sum(file.size or 0 for file in files) > limit:
                 raise HTTPException(413, BODY_LIMIT_MESSAGE)
-            flags = {name: form.get(name, 'false') for name in ('online_search', 'ai_analysis')}
+            flags = {name: form.get(name, 'false') for name in ('online_search', 'ai_analysis', 'reverse_search')}
             if any(value not in ('true', 'false') for value in flags.values()):
                 raise HTTPException(400, 'Параметры согласия должны иметь значение true или false.')
+            if flags['reverse_search'] == 'true' and flags['online_search'] != 'true':
+                raise HTTPException(400, 'Обратный поиск требует включённого онлайн-поиска.')
             intended_use = form.get('intended_use', 'unspecified')
             if intended_use not in get_args(IntendedUse):
                 raise HTTPException(400, 'Выберите поддерживаемый вариант использования материала.')
@@ -178,9 +183,12 @@ def audit_detail(audit_id: int):
 
 @app.post('/api/audits/{audit_id}/rerun', status_code=201)
 def rerun_audit(audit_id: int, options: AuditOptions = AuditOptions()):
+    if options.reverse_search and not options.online_search:
+        raise HTTPException(400, 'Обратный поиск требует включённого онлайн-поиска.')
     try:
         with original(audit_id) as (stream, filename):
-            return run_audit(stream, filename, options.online_search, options.ai_analysis, options.intended_use)
+            return run_audit(stream, filename, options.online_search, options.ai_analysis,
+                             options.intended_use, options.reverse_search)
     except KeyError as exc:
         raise HTTPException(404, 'Проверка не найдена.') from exc
     except (ExtractionError, AuditUnavailable) as exc:
@@ -212,6 +220,7 @@ def get_settings():
     return {'deepseek_configured': is_configured(), 'deepseek_model': settings.deepseek_model,
             'ai': {'provider': provider, 'label': provider_label(provider), 'model': provider_model(provider),
                    'configured': is_configured(provider), 'verify_tls': verify_tls(provider)},
+            'reverse_search_configured': bool(settings.google_vision_api_key.get_secret_value().strip()),
             'legal_registries': LEGAL_REGISTRIES}
 
 

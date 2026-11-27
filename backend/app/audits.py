@@ -12,6 +12,7 @@ from uuid import UUID, uuid4
 from .config import settings
 from .db import connect, database_path
 from .deepseek import analyze
+from .rights import review_images
 from .evidence import check_legal, search_sources
 from .extraction import ExtractionError, extract
 
@@ -196,7 +197,7 @@ def assessment(extraction: dict, sources: dict, legal: dict, intended_use: str) 
 
 
 def run_audit(stream: BinaryIO, raw_filename: str, online_search: bool, ai_analysis: bool,
-              intended_use: str = 'unspecified') -> dict:
+              intended_use: str = 'unspecified', reverse_search: bool = False) -> dict:
     filename = display_filename(raw_filename)
     limit = settings.max_upload_mb * 1024 * 1024
     digest = hashlib.sha256()
@@ -215,13 +216,17 @@ def run_audit(stream: BinaryIO, raw_filename: str, online_search: bool, ai_analy
         if not size:
             raise ExtractionError('Файл пуст.')
         sha256 = digest.hexdigest()
-        extracted = extract(pending, filename)
+        previews = {} if online_search and reverse_search else None
+        extracted = extract(pending, filename, previews=previews)
+        image_review = review_images(extracted, intended_use, online_search, ai_analysis, previews)
         sources = search_sources(extracted, sha256, online_search)
         legal = check_legal(extracted)
-        ai = analyze(extracted, sources, legal, ai_analysis)
-        result = {'extraction': extracted, 'sources': sources, 'legal': legal, 'ai': ai,
+        ai = analyze(extracted, sources, legal, ai_analysis, image_review=image_review)
+        result = {'extraction': extracted, 'sources': sources, 'legal': legal, 'ai': ai, 'image_review': image_review,
                   'assessment': assessment(extracted, sources, legal, intended_use),
                   'options': {'online_search': online_search, 'ai_analysis': ai_analysis, 'intended_use': intended_use}}
+        if reverse_search:
+            result['options']['reverse_search'] = True
         raw_result = json.dumps(result, ensure_ascii=False, allow_nan=False)
         with connect() as conn:
             audit_id = conn.execute(

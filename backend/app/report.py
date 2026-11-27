@@ -173,6 +173,28 @@ def render_pdf(audit: dict) -> bytes:
         "status": audit.get("status"), "format": extraction.get("format") or audit.get("format"),
         "size_bytes": audit.get("size_bytes"), "sha256": audit.get("sha256") or extraction.get("sha256"),
     })
+    if (review := result.get("image_review")) and review["status"] != "no_images":
+        paragraph("Что сделать с изображениями", heading)
+        paragraph(f"Карточек · {review['checked']} из {review['total']} уникальных изображений.")
+        if review["status"] == "local_only":
+            paragraph("Для поиска источников и замен включите онлайн-поиск при повторной проверке.")
+        for item in review["items"]:
+            action = {"credit": "Добавьте подпись", "reuse": "Можно использовать по указанным условиям",
+                      "replace": "Предложена замена", "review": "Разрешение не подтверждено",
+                      "no_query": "Недостаточно признаков для поиска"}[item["status"]]
+            paragraph(f"{item['id']} · {action}", subheading)
+            paragraph(f"{', '.join(item['locations'])} · {item['name']}")
+            paragraph(item["reason"])
+            for key, label in (("source", "Найденный источник"), ("replacement", "Вариант на замену")):
+                if material := item.get(key):
+                    fields({label: material["title"], "url": material["url"], "match": material.get("match"),
+                            "Лицензия источника": material["license"]["name"], "license_url": material["license"].get("url"),
+                            "Файл замены": material.get("download_url") if key == "replacement" else None})
+            if credit := item.get("credit") or (item.get("replacement") or {}).get("credit"):
+                fields({"Готовая подпись": credit})
+            for match in item.get("web_matches", []) or []:
+                fields({"Совпадение в интернете": match["title"], "url": match["url"]})
+
     paragraph("Оценка риска", heading)
     paragraph(_label(assessment.get("level") or audit.get("risk_level")), subheading)
     paragraph(assessment.get("reason", ""))

@@ -56,12 +56,43 @@ interface EvidenceSection {
   [key: string]: unknown
 }
 
+interface LicensedImage {
+  title: string
+  url: string
+  download_url?: string
+  author: string
+  license: { name: string, url?: string }
+  match?: string
+  credit?: string
+}
+
+export interface ImageReview {
+  status: string
+  total: number
+  checked: number
+  model_status?: string
+  reverse_status?: string
+  reverse_checked?: number
+  items: Array<{
+    id: string
+    name: string
+    locations: string[]
+    status: 'credit' | 'reuse' | 'replace' | 'review' | 'no_query'
+    reason: string
+    source?: LicensedImage | null
+    replacement?: LicensedImage
+    credit?: string
+    web_matches: Array<{ title: string, url: string, match: string }>
+  }>
+}
+
 export interface Audit extends AuditSummary {
   result: {
     extraction?: Extraction
     sources?: EvidenceSection & { items: Source[] }
     legal?: EvidenceSection & { items: Registry[] }
     ai?: EvidenceSection & { summary?: string, observations?: unknown[] }
+    image_review?: ImageReview
     assessment?: { level: string, reason: string, recommendations: string[], limitations: string[], confidence?: string, risks?: unknown[] }
     [key: string]: unknown
   } | null
@@ -70,7 +101,8 @@ export interface Audit extends AuditSummary {
 export interface AuditOptions {
   online_search: boolean
   ai_analysis: boolean
-  intended_use?: 'unspecified' | 'commercial' | 'redistribute_modified' | 'commercial_modified'
+  reverse_search?: boolean
+  intended_use?: 'unspecified' | 'noncommercial' | 'commercial' | 'redistribute_modified' | 'commercial_modified'
 }
 
 export interface UploadResult {
@@ -83,6 +115,7 @@ export interface Settings {
   deepseek_model: string
   ai: { provider: "deepseek" | "mai", label: string, model: string, configured: boolean, verify_tls: boolean }
   legal_registries: Registry[]
+  reverse_search_configured?: boolean
 }
 
 export interface Health {

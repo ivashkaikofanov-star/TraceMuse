@@ -487,3 +487,11 @@ a, button, input, summary { outline-offset: 4px; }
 .assessment-confidence { margin-top: 5px; }
 
 .archive-inventory summary { cursor: pointer; margin-bottom: 9px; font-size: 14px; font-weight: 650; }
+
+.image-action-heading, .image-action-links { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px 14px; }
+.image-action-heading { justify-content: space-between; }
+.image-action { overflow-wrap: anywhere; }
+.image-credit { padding: 12px; margin-top: 12px; background: rgba(255, 255, 255, .03); border-radius: 8px; }
+.image-credit .muted { margin-left: 8px; }
+.image-replacement { margin-top: 14px; }
+.image-replacement h4 { margin: 0 0 8px; }
