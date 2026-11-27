@@ -191,6 +191,17 @@ def pixel_hash(image: Image.Image) -> str:
     return hashlib.sha256(struct.pack('>II', *image.size) + image.convert('RGBA').tobytes()).hexdigest()
 
 
+def jpeg_preview(image: Image.Image, side: int) -> bytes:
+    scale = min(1, side / max(image.size))
+    size = tuple(max(1, round(dim * scale)) for dim in image.size)
+    preview = image.resize(size, Image.Resampling.LANCZOS).convert('RGBA')
+    background = Image.new('RGB', preview.size, 'white')
+    background.paste(preview, mask=preview.getchannel('A'))
+    with io.BytesIO() as buffer:
+        background.save(buffer, format='JPEG', quality=78)
+        return buffer.getvalue()
+
+
 def _image_record(stream: BinaryIO, name: str, expected: str | None = None,
                   previews: dict[str, bytes] | None = None) -> dict:
     record = {
@@ -215,16 +226,8 @@ def _image_record(stream: BinaryIO, name: str, expected: str | None = None,
             record['pixel_sha256'] = pixel_hash(image)
         if matches := identify_graphics(image, split=True):
             record['logo_references'] = matches
-        if previews is not None and len(previews) < 6 and record['sha256'] not in previews:
-            if min(width, height) >= 64:
-                scale = min(1, 640 / max(image.size))
-                size = tuple(max(1, round(dim * scale)) for dim in image.size)
-                preview = image.resize(size, Image.Resampling.LANCZOS).convert('RGBA')
-                background = Image.new('RGB', preview.size, 'white')
-                background.paste(preview, mask=preview.getchannel('A'))
-                with io.BytesIO() as buffer:
-                    background.save(buffer, format='JPEG', quality=86)
-                    previews[record['sha256']] = buffer.getvalue()
+        if previews is not None and len(previews) < MAX_IMAGES and record['sha256'] not in previews:
+            previews[record['sha256']] = jpeg_preview(image, 640 if len(previews) < 6 else 360)
         if expected:
             record['metadata'] = {
                 label: _short(image.info[field])

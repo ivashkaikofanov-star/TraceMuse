@@ -221,6 +221,7 @@ def get_settings():
             'ai': {'provider': provider, 'label': provider_label(provider), 'model': provider_model(provider),
                    'configured': is_configured(provider), 'verify_tls': verify_tls(provider)},
             'reverse_search_configured': bool(settings.google_vision_api_key.get_secret_value().strip()),
+            'pixabay_configured': bool(settings.pixabay_api_key.get_secret_value().strip()),
             'legal_registries': LEGAL_REGISTRIES}
 
 

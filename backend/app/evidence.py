@@ -130,15 +130,18 @@ def _license(info):
     if not parsed or parsed.hostname != "creativecommons.org":
         return record
     if re.match(r"^/publicdomain/zero/1\.0(?:/|$)", parsed.path):
-        record.update(commercial_use="Разрешено по заявленной CC0",
+        record.update(kind="cc0", name=name or "CC0 1.0", status="catalog_declaration",
+                      commercial_use="Разрешено по заявленной CC0",
                       modification="Разрешено по заявленной CC0",
                       attribution="CC0 не требует атрибуции",
                       commercial_allowed=True, derivatives_distribution_allowed=True,
                       attribution_required=False, share_alike=False)
-    match = re.match(r"^/licenses/(by(?:-nc)?(?:-sa|-nd)?)/[1-4]\.\d(?:/|$)", parsed.path)
+    match = re.match(r"^/licenses/(by(?:-nc)?(?:-sa|-nd)?)/([1-4]\.\d)(?:/|$)", parsed.path)
     if match:
         terms = set(match[1].split("-"))
         record.update(
+            kind="cc_" + match[1].replace("-", "_"),
+            name=name or f"CC {match[1].upper()} {match[2]}", status="catalog_declaration",
             commercial_use="Требуется отдельное разрешение" if "nc" in terms else "Допускается при соблюдении условий",
             modification="Распространение изменённой версии требует отдельного разрешения"
             if "nd" in terms else "Допускается при соблюдении условий",

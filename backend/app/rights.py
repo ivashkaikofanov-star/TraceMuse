@@ -4,6 +4,7 @@ import base64
 from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from io import BytesIO
+import math
 import json
 import re
 from time import monotonic
@@ -11,10 +12,12 @@ from time import monotonic
 import httpx
 from PIL import Image
 
+from . import pixabay
 from .config import settings
 from .deepseek import plan_image_searches, rank_image_replacements
 from .evidence import HTTP_HEADERS, THUMBNAIL_HOSTS, _catalog_meta, _commons_title, _file_url, _http_url, _license, _pages, _plain, _query, _read
-from .extraction import image_phash, pixel_hash
+from .extraction import image_phash, jpeg_preview, pixel_hash
+from .photo_license import commercial_conditions, photo_credit
 
 MAX_ASSETS = 12
 VISION_URL = 'https://vision.googleapis.com/v1/images:annotate'
@@ -29,6 +32,7 @@ def _terms(text: str) -> set[str]:
 
 def _meaningful(text: str) -> str:
     text = re.sub(r'https?://\S+', ' ', text).replace('_', ' ')
+    text = re.sub(r'\(\d+\)|\b\d{5,}\b', ' ', text)
     return ' '.join(text.split())[:100] if _terms(text) else ''
 
 
@@ -36,8 +40,6 @@ def _assets(extraction: dict) -> list[dict]:
     assets = {}
     for image in extraction.get('images', []):
         if not image.get('sha256'):
-            continue
-        if 0 < min(image.get('width', 0), image.get('height', 0)) < 32:
             continue
         asset = assets.get(image['sha256'])
         if asset is None:
@@ -97,6 +99,7 @@ def _vision_matches(previews: dict[str, bytes]) -> tuple[str, dict]:
             continue
         links = []
         commons = set()
+        stock_ids = set()
         pages = item.get('pagesWithMatchingImages')
         for page in pages[:8] if isinstance(pages, list) else []:
             if not isinstance(page, dict) or not _http_url(page.get('url')):
@@ -110,11 +113,14 @@ def _vision_matches(previews: dict[str, bytes]) -> tuple[str, dict]:
                               'url': url, 'match': 'Google Vision указал страницу с полным совпадением изображения'})
             if title := _commons_title(url):
                 commons.add(title)
+            if stock_id := pixabay.photo_id(url):
+                stock_ids.add(stock_id)
         labels = item.get('bestGuessLabels')
         labels = labels if isinstance(labels, list) else []
         label = next((_meaningful(_plain(entry.get('label'))) for entry in labels[:2]
                       if isinstance(entry, dict) and isinstance(entry.get('label'), str)), '')
-        results[sha] = {'links': links[:4], 'label': label, 'commons': sorted(commons)[:4]}
+        results[sha] = {'links': links[:4], 'label': label, 'commons': sorted(commons)[:4],
+                        'stock_ids': sorted(stock_ids)[:1]}
     return ('unavailable' if errors == len(previews) else 'partial' if errors else 'complete'), results
 
 
@@ -132,29 +138,10 @@ def _material(title: str, info: dict) -> dict:
     return record
 
 
-def _credit(material: dict, modified: bool = False) -> str:
-    license = material['license']
-    author = f" — {material['author']}" if material['author'] else ''
-    change = ' · Изображение изменено.' if modified else ''
-    return f"«{material['title']}»{author}. Источник: {material['url']}. {license['name']}: {license['url']}.{change}"
-
-
-def _eligible(material: dict, intended_use: str, *, replacement=False) -> bool:
-    license = material['license']
-    if license['status'] != 'catalog_declaration' or not license.get('url'):
-        return False
-    restrictions = license.get('restrictions', [])
-    unchanged = intended_use in {'noncommercial', 'commercial'} and not replacement
-    share_alike_only = restrictions == ['Производные работы распространяются на совместимых условиях ShareAlike']
-    if (restrictions and not (unchanged and share_alike_only)) or license.get('attribution_required') is None:
-        return False
-    if license['attribution_required'] and not material['author']:
-        return False
-    if (replacement or intended_use != 'noncommercial') and license.get('commercial_allowed') is not True:
-        return False
-    if (replacement or intended_use not in {'noncommercial', 'commercial'}) and license.get('derivatives_distribution_allowed') is not True:
-        return False
-    return True
+def _eligible_replacement(material: dict) -> bool:
+    licence = material['license']
+    return bool(licence.get('url') and licence.get('kind') in {'cc0', 'cc_by'}
+                and not licence['restrictions'] and (not licence['attribution_required'] or material['author']))
 
 
 def _catalog_pages(client, deadline, term):
@@ -183,38 +170,87 @@ def _similar(client, deadline, asset, info):
         return 0.85 <= ratio <= 1.18 and (int(asset['phash'], 16) ^ int(image_phash(image), 16)).bit_count() <= 7
 
 
-def _same_pixels(client, deadline, asset, info):
+def _same_pixels(client, deadline, asset, info, hosts=('upload.wikimedia.org',)):
     url = info.get('url')
     size = info.get('size')
     if (not asset.get('pixel_sha256') or (info.get('width'), info.get('height')) != (asset.get('width'), asset.get('height'))
-            or not isinstance(size, int) or not 0 < size <= 2_000_000 or not _http_url(url, host='upload.wikimedia.org')):
+            or not isinstance(size, int) or not 0 < size <= 2_000_000 or not any(_http_url(url, host=host) for host in hosts)):
         return False
     data = _read(client, url, None, deadline, 2_000_000)
     with Image.open(BytesIO(data), formats=('JPEG', 'PNG', 'WEBP', 'GIF')) as image:
         return image.size == (asset['width'], asset['height']) and pixel_hash(image) == asset['pixel_sha256']
 
 
-def _approved_original(matches, intended_use, branding, failed):
-    exact = [match for match in matches if match['match_kind'] != 'similar']
-    if not exact or branding or len({match['author'] for match in exact}) != 1:
+def _candidate_photo(client, deadline, asset, info, hosts=THUMBNAIL_HOSTS):
+    thumbnail = info.get('thumburl')
+    if not any(_http_url(thumbnail, host=host) for host in hosts):
         return None
-    if any(not _eligible(match, intended_use) for match in exact):
-        return None
-    material = exact[0]
+    data = _read(client, thumbnail, None, deadline, 360_000)
+    with Image.open(BytesIO(data), formats=('JPEG', 'PNG', 'WEBP', 'GIF')) as image:
+        if image.width * image.height > 350_000:
+            return None
+        distance = None
+        if asset.get('phash') and asset.get('width') and asset.get('height'):
+            ratio = (image.width / image.height) / (asset['width'] / asset['height'])
+            difference = (int(asset['phash'], 16) ^ int(image_phash(image), 16)).bit_count()
+            if difference <= 2 and 0.9 <= ratio <= 1.1:
+                return None  # A recoded copy does not replace the original.
+            distance = difference + min(12, round(8 * abs(math.log(ratio))))
+        return base64.b64encode(jpeg_preview(image, 360)).decode('ascii'), distance
+
+
+def _item_outcome(matches, branding, intended_use, failed, alternatives):
     modified = intended_use in {'redistribute_modified', 'commercial_modified'}
-    status = 'credit' if material['license']['attribution_required'] else 'reuse'
-    return {'status': status, 'source': material, 'credit': _credit(material, modified),
-            'reason': 'Подтверждено точное совпадение изображения. В каталоге указаны условия для выбранного сценария.',
-            'alternatives': [], 'failed': failed}
+    decision = commercial_conditions(matches, branded=branding, modified=modified)
+    source = min(matches, key=lambda item: item['match_kind'] == 'similar', default=None)
+    action = decision['action']
+    if failed and action == 'unverified':
+        decision['detail'] += ' Часть запросов к источникам не завершилась.'
+    item = {'status': {'keep': 'reuse', 'credit': 'credit'}.get(action, 'review'),
+            'source': source, 'rights': decision, 'reason': decision['detail'], 'failed': failed,
+            'alternatives': alternatives}
+    if action == 'credit':
+        item['credit'] = photo_credit(source, modified)
+    return item
+
+
+def _stock_match(client, deadline, asset, image_id):
+    for hit in pixabay.lookup(client, deadline, image_id=image_id):
+        candidates = [
+            {'url': hit['imageURL'], 'width': hit['imageWidth'], 'height': hit['imageHeight'], 'size': hit['imageSize']},
+            {'url': hit['webformatURL'], 'width': hit['webformatWidth'], 'height': hit['webformatHeight'], 'size': 2_000_000},
+        ]
+        if any(_same_pixels(client, deadline, asset, info, pixabay.MEDIA_HOSTS) for info in candidates):
+            return pixabay.material(hit) | {'match': 'Все декодированные пиксели совпали с файлом Pixabay', 'match_kind': 'pixels'}
+    return None
+
+
+def _stock_replacements(client, deadline, asset, term, excluded):
+    candidates = []
+    words = _terms(term)
+    if not words:
+        return candidates
+    for hit in pixabay.lookup(client, deadline, term=term):
+        tags = _terms(hit['tags'])
+        overlap = words & tags
+        if hit['pageURL'] in excluded or len(overlap) < min(2, len(words)):
+            continue
+        if re.search(r'\b(?:logo|logotype|trademark|brand|branding|логотип|бренд)\b', hit['tags'], re.IGNORECASE):
+            continue
+        photo = _candidate_photo(client, deadline, asset, {'thumburl': hit['webformatURL']}, pixabay.MEDIA_HOSTS)
+        if photo:
+            preview, distance = photo
+            candidates.append({**pixabay.material(hit), 'preview': preview, 'distance': distance, 'relevance': len(overlap)})
+        if len(candidates) >= 3:
+            break
+    return candidates
 
 
 def _check_asset(client, deadline, asset, query, vision, intended_use):
     excluded, matches, alternatives = set(), [], []
     sha1 = asset.get('sha1')
     failed = False
-    tried = False
     if isinstance(sha1, str) and re.fullmatch(r'[0-9a-f]{40}', sha1):
-        tried = True
         try:
             answer = _query(client, deadline, {'list': 'allimages', 'aisha1': sha1, 'ailimit': 5,
                                               'aiprop': 'sha1|canonicaltitle|extmetadata'})
@@ -230,7 +266,6 @@ def _check_asset(client, deadline, asset, query, vision, intended_use):
         except NETWORK_ERRORS:
             failed = True
     if vision.get('commons') and not matches:
-        tried = True
         try:
             pages = _pages(_query(client, deadline, {'titles': '|'.join(vision['commons']), 'prop': 'imageinfo',
                                                       'iiprop': 'sha1|extmetadata|url|mime'}))
@@ -250,6 +285,13 @@ def _check_asset(client, deadline, asset, query, vision, intended_use):
             failed = True
 
     branding = bool(asset.get('logo_references'))
+    if not matches and not branding and vision.get('stock_ids'):
+        try:
+            if match := _stock_match(client, deadline, asset, vision['stock_ids'][0]):
+                matches.append(match)
+                excluded.add(match['url'])
+        except NETWORK_ERRORS:
+            failed = True
     source_term = _meaningful(query.get('source', '') or vision.get('label', '') or asset['description'])
     replacement_term = _meaningful(query.get('replacement', '') or vision.get('label', '') or asset['description'])
     if matches:
@@ -259,12 +301,13 @@ def _check_asset(client, deadline, asset, query, vision, intended_use):
         name = _meaningful(asset['name'].rsplit('.', 1)[0])
         source_term = (context or name) if asset['prefer_context'] else (name or context)
     replacement_term = replacement_term or source_term
-    if ready := _approved_original(matches, intended_use, branding, failed):
-        return ready
+    original = _item_outcome(matches, branding, intended_use, failed, [])
+    if original['status'] == 'reuse':
+        return original
 
     look_for = list(dict.fromkeys(term for term in (source_term, replacement_term if not branding else '') if term))
+    preview_budget = 6
     for term in look_for:
-        tried = True
         try:
             pages = _catalog_pages(client, deadline, term)
         except NETWORK_ERRORS:
@@ -299,81 +342,145 @@ def _check_asset(client, deadline, asset, query, vision, intended_use):
                 except NETWORK_ERRORS:
                     failed = True
             width, height = info.get('width'), info.get('height')
-            if (term == replacement_term and not branding and _eligible(material, intended_use, replacement=True)
-                    and isinstance(width, int) and width >= 320 and isinstance(height, int) and height >= 240):
-                words = _terms(replacement_term)
-                overlap = words & _terms(f"{material['title']} {material['description']}")
-                if len(overlap) >= min(2, len(words)):
-                    alternatives.append((len(overlap), material))
-    if ready := _approved_original(matches, intended_use, branding, failed):
-        return ready
-    sorted_alternatives = sorted(alternatives, key=lambda candidate: candidate[0], reverse=True)
-    source = min(matches, key=lambda m: m['match_kind'] == 'similar', default=None)
-    conflict = bool(source and source['match_kind'] != 'similar' and (
-        (intended_use in {'commercial', 'commercial_modified'} and source['license'].get('commercial_allowed') is False)
-        or (intended_use in {'redistribute_modified', 'commercial_modified'} and source['license'].get('derivatives_distribution_allowed') is False)
+            if (term != replacement_term or branding or not preview_budget or not _eligible_replacement(material)
+                    or not isinstance(width, int) or width < 320 or not isinstance(height, int) or height < 240):
+                continue
+            words = _terms(replacement_term)
+            overlap = words & _terms(f"{material['title']} {material['description']}")
+            if not words or len(overlap) < min(2, len(words)):
+                continue
+            preview_budget -= 1
+            try:
+                photo = _candidate_photo(client, deadline, asset, info)
+            except NETWORK_ERRORS:
+                failed = True
+                continue
+            if photo:
+                preview, distance = photo
+                alternatives.append({**material, 'preview': preview, 'distance': distance, 'relevance': len(overlap)})
+    alternatives = [material for material in alternatives if material['url'] not in excluded]
+    if replacement_term and not branding and not any(not material['license']['attribution_required'] for material in alternatives):
+        try:
+            alternatives.extend(_stock_replacements(client, deadline, asset, replacement_term, excluded))
+        except NETWORK_ERRORS:
+            failed = True
+    return _item_outcome(matches, branding, intended_use, failed, alternatives)
+
+
+def _ready_replacement(material: dict) -> dict:
+    result = {key: value for key, value in material.items() if key not in {'distance', 'relevance', 'description'}}
+    requires_credit = material['license']['attribution_required']
+    result['kind'] = 'with_credit' if requires_credit else 'no_credit'
+    if requires_credit:
+        result['credit'] = photo_credit(material)
+    return result
+
+
+def _candidate_group(alternatives, attributed):
+    eligible = [item for item in alternatives if item['license']['attribution_required'] is attributed]
+    return sorted(eligible, key=lambda item: (
+        item['distance'] if item['distance'] is not None else 100,
+        -item['relevance'],
     ))
-    if branding:
-        reason = 'Распознан логотип. Условия использования знака требуют отдельного подтверждения.'
-    elif conflict:
-        reason = 'Условия найденной копии ограничивают выбранное использование.'
-    elif source and source['match_kind'] != 'similar' and source['license'].get('share_alike'):
-        reason = 'Подтверждено точное совпадение. При распространении изменённой версии условия ShareAlike требуют совместимой лицензии.'
-    elif source:
-        reason = 'Найден кандидат в источники. Разрешение на использование данного изображения не подтверждено.'
-    elif failed:
-        reason = 'Часть запросов к каталогу не завершилась. Разрешение подтвердить не удалось.'
-    else:
-        reason = 'В проверенных результатах не удалось подтвердить разрешение для исходного изображения.'
-    return {'status': 'replace' if sorted_alternatives else 'review' if tried or branding else 'no_query',
-            'source': source, 'reason': reason, 'failed': failed,
-            'alternatives': [material for _, material in sorted_alternatives[:3] if material['url'] not in excluded]}
+
+
+def _rank_replacements(outcomes, assets, ai_enabled):
+    groups, requests = {}, []
+    for outcome, asset in zip(outcomes, assets):
+        if outcome['rights']['action'] == 'keep':
+            continue
+        for attributed in (False, True):
+            if attributed and outcome['rights']['action'] == 'credit':
+                continue
+            kind = 'with_credit' if attributed else 'no_credit'
+            group_id = f"{asset['id']}:{kind}"
+            group = _candidate_group(outcome['alternatives'], attributed)
+            if not group:
+                continue
+            # The model may choose among comparably close photos. Keep the visual ground
+            # truth for deciding whether a second, attributed option is actually closer.
+            best = group[0]['distance']
+            group = [item for item in group if item['distance'] == best][:3]
+            groups[group_id] = group
+            if len(group) > 1:
+                requests.append({'id': group_id, 'context': asset['search_context'], 'description': asset['description'],
+                                 'candidates': [{'id': n, 'title': item['title'], 'description': item['description']}
+                                                for n, item in enumerate(group)]})
+    ranks = rank_image_replacements(requests) if ai_enabled and requests else {}
+    selected = {}
+    for key, group in groups.items():
+        choice = ranks.get(key, 0)
+        if choice == -1:
+            continue
+        selected[key] = group[choice] if 0 <= choice < len(group) else group[0]
+    return selected, len(ranks)
+
+
+def _add_photos(asset, outcome, report_previews, reverse_evidence=None):
+    outcome.update(id=asset['id'], name=asset['name'], locations=asset['locations'],
+                   web_matches=(reverse_evidence or {}).get('links', []))
+    if preview := (report_previews or {}).get(asset['sha256']):
+        outcome['original_preview'] = base64.b64encode(preview).decode('ascii')
+    return outcome
+
+
+def _unchecked(asset, report_previews, *, limit=False):
+    detail = ('Изображение вне лимита онлайн-поиска этой проверки.' if limit
+              else 'Поиск источника выключен. Разрешение на коммерческое использование не установлено.')
+    decision = {'category': 'unknown', 'label': 'Условия не проверялись',
+                'action': 'unverified', 'detail': detail, 'warning': '', 'changes': ''}
+    return _add_photos(asset, {'status': 'review', 'rights': decision, 'reason': detail,
+                              'failed': False, 'replacements': []}, report_previews)
 
 
 def review_images(extraction: dict, intended_use: str, online: bool, ai_enabled: bool,
-                  previews: dict[str, bytes] | None = None) -> dict:
+                  previews: dict[str, bytes] | None = None, *, report_previews: dict[str, bytes] | None = None) -> dict:
     assets = _assets(extraction)
     selected = assets[:MAX_ASSETS]
     if not selected:
         return {'status': 'no_images', 'total': 0, 'checked': 0, 'items': []}
     if not online:
-        return {'status': 'local_only', 'total': len(assets), 'checked': 0, 'items': []}
+        items = [_unchecked(asset, report_previews) for asset in assets]
+        return {'status': 'local_only', 'total': len(assets), 'checked': 0, 'items': items}
     limited = [{'id': item['id'], 'context': item['search_context'][:360], 'description': item['description'][:180],
                 'name': item['name'][:100], 'logo': ', '.join(ref['brand'] for ref in item.get('logo_references', []))}
                for item in selected]
-    reverse_status, reversed_images = _vision_matches(previews) if previews is not None else ('disabled', {})
+    reverse_status, reversed_images = (_vision_matches(dict(list(previews.items())[:6])) if previews is not None
+                                       else ('disabled', {}))
+    reverse_checked = len(reversed_images)
+    linked_commons = list(dict.fromkeys(title for url in extraction.get('links', []) if (title := _commons_title(url))))[:2]
+    linked_stock = list(dict.fromkeys(photo_id for url in extraction.get('links', []) if (photo_id := pixabay.photo_id(url))))[:1]
     for image, item in zip(limited, selected):
-        image['visual_hint'] = reversed_images.get(item['sha256'], {}).get('label', '')
-    planning = plan_image_searches(limited, intended_use) if ai_enabled else {'status': 'disabled', 'queries': {}}
-    deadline = monotonic() + 20
+        hints = reversed_images.setdefault(item['sha256'], {})
+        image['visual_hint'] = hints.get('label', '')
+        hints['commons'] = list(dict.fromkeys(hints.get('commons', []) + linked_commons))[:4]
+        hints['stock_ids'] = list(dict.fromkeys(hints.get('stock_ids', []) + linked_stock))[:1]
+    planning = plan_image_searches(limited, 'commercial') if ai_enabled else {'status': 'disabled', 'queries': {}}
+    deadline = monotonic() + 24
     with httpx.Client(headers=HTTP_HEADERS, follow_redirects=False) as client, ThreadPoolExecutor(max_workers=4) as pool:
         futures = [pool.submit(_check_asset, client, deadline, item, planning['queries'].get(item['id'], {}),
                                reversed_images.get(item['sha256'], {}), intended_use) for item in selected]
         outcomes = [future.result() for future in futures]
-    ranking_data = [{'id': item['id'], 'context': item['search_context'], 'description': item['description'],
-                     'candidates': [{'id': n, 'title': candidate['title'], 'description': candidate['description']}
-                                    for n, candidate in enumerate(outcome['alternatives'])]}
-                    for item, outcome in zip(selected, outcomes) if len(outcome['alternatives']) > 1]
-    ranks = rank_image_replacements(ranking_data) if ai_enabled and ranking_data else {}
+    ranked, count = _rank_replacements(outcomes, selected, ai_enabled)
     items = []
-    for item, outcome in zip(selected, outcomes):
-        alternatives = outcome.pop('alternatives')
-        if alternatives:
-            chosen = ranks.get(item['id'], 0)
-            if chosen == -1:
-                outcome['status'] = 'review'
-                outcome['reason'] += ' По теме элемента подходящей замены не найдено.'
-            else:
-                replacement = alternatives[chosen] if 0 <= chosen < len(alternatives) else alternatives[0]
-                outcome['replacement'] = replacement | {'credit': _credit(replacement)}
-        elif outcome['status'] == 'replace':
-            outcome['status'] = 'review'
-        reverse_evidence = reversed_images.get(item['sha256'], {})
-        items.append({**outcome, 'id': item['id'], 'name': item['name'], 'locations': item['locations'],
-                      'web_matches': reverse_evidence.get('links', [])})
+    for asset, outcome in zip(selected, outcomes):
+        outcome.pop('alternatives')
+        no_credit = ranked.get(f"{asset['id']}:no_credit")
+        with_credit = ranked.get(f"{asset['id']}:with_credit")
+        choices = [_ready_replacement(no_credit)] if no_credit else []
+        if with_credit and (not no_credit or (
+                with_credit['distance'] is not None and no_credit['distance'] is not None
+                and with_credit['distance'] < no_credit['distance'])):
+            choices.append(_ready_replacement(with_credit))
+        outcome['replacements'] = choices
+        if choices:
+            outcome['replacement'] = {key: value for key, value in choices[0].items() if key != 'preview'}
+            if outcome['status'] == 'review':
+                outcome['status'] = 'replace'
+        items.append(_add_photos(asset, outcome, report_previews, reversed_images.get(asset['sha256'])))
+    items.extend(_unchecked(asset, report_previews, limit=True) for asset in assets[MAX_ASSETS:])
     return {'status': 'partial' if len(assets) > len(selected) or any(item['failed'] for item in items)
                       or reverse_status in {'unavailable', 'partial', 'not_configured', 'not_available'} else 'complete',
             'total': len(assets), 'checked': len(selected), 'model_status': planning['status'],
-            'model_ranked': len(ranks),
-            'reverse_status': reverse_status, 'reverse_checked': len(reversed_images), 'items': items,
-            'checked_at': datetime.now(UTC).isoformat(timespec='seconds')}
+            'model_ranked': count, 'reverse_status': reverse_status, 'reverse_checked': reverse_checked,
+            'items': items, 'checked_at': datetime.now(UTC).isoformat(timespec='seconds')}

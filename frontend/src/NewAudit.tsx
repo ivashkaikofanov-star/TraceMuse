@@ -5,7 +5,7 @@ import { describeError, formatSize, request } from './api'
 import type { AuditOptions, AuditSummary, Settings, UploadResult } from './api'
 import { Notice, PageTitle } from './ui'
 
-export const localOptions: AuditOptions = { online_search: false, ai_analysis: false, intended_use: 'unspecified' }
+export const localOptions: AuditOptions = { online_search: false, ai_analysis: false, intended_use: 'commercial' }
 const allowedExtensions = new Set(['pdf', 'docx', 'pptx', 'html', 'htm', 'png', 'jpg', 'jpeg', 'webp', 'svg', 'zip'])
 
 export function AuditConsent({ value, onChange, disabled = false }: {
@@ -23,34 +23,22 @@ export function AuditConsent({ value, onChange, disabled = false }: {
 
   return <fieldset className="consent" disabled={disabled}>
     <legend>Параметры проверки</legend>
-    <label className="intended-use">Планируемое использование
-      <select value={value.intended_use ?? 'unspecified'} onChange={event => onChange({ ...value, intended_use: event.target.value as AuditOptions['intended_use'] })}>
-        <option value="unspecified">Не определено</option>
-        <option value="noncommercial">Некоммерческое использование без изменений</option>
-        <option value="commercial">Коммерческое использование без изменений</option>
-        <option value="redistribute_modified">Распространение изменённой версии</option>
-        <option value="commercial_modified">Коммерческое использование изменённой версии</option>
-      </select>
-    </label>
+    <p>Для каждого изображения TraceMuse покажет, можно ли использовать его в коммерческом материале и какие условия действуют при изменении.</p>
     <h3>Внешние сервисы</h3>
     <p>Включайте эти параметры, если согласны передать указанные данные. При выключенных параметрах файл обрабатывается локально.</p>
     <label className="consent-choice">
-      <input type="checkbox" checked={value.online_search} onChange={event => onChange({ ...value, online_search: event.target.checked, reverse_search: event.target.checked && value.reverse_search })} />
+      <input type="checkbox" checked={value.online_search} onChange={event => onChange({ ...value,
+        online_search: event.target.checked, ai_analysis: event.target.checked && Boolean(provider?.configured),
+        reverse_search: event.target.checked && value.reverse_search,
+      })} />
       <Globe2 size={18} />
-      <span><strong>Поиск источников онлайн</strong><small>В Wikimedia Commons отправляются хеши изображений и поисковые запросы по тексту, названиям и описаниям из материала. TraceMuse сверяет источники и подбирает открытые альтернативы.</small></span>
+      <span><strong>Поиск источников онлайн</strong><small>Commons получит хеши и краткие поисковые запросы из материала. {settings?.pixabay_configured && 'Pixabay получит поисковые запросы для подбора замен. '}{provider?.configured ? `Модель ${provider.label} получит текстовый контекст и поможет выбрать замены. ` : ''}{provider?.configured && provider.verify_tls === false && 'Проверка сертификата МАИ отключена.'}</small></span>
     </label>
     {settings?.reverse_search_configured && <label className="consent-choice">
       <input type="checkbox" checked={Boolean(value.reverse_search)} disabled={!value.online_search} onChange={event => onChange({ ...value, reverse_search: event.target.checked })} />
       <ScanLine size={18} />
       <span><strong>Обратный поиск изображений</strong><small>До шести уменьшенных копий изображений отправятся в Google Cloud Vision. Сервис ищет страницы, на которых они встречаются.</small></span>
     </label>}
-    <label className="consent-choice">
-      <input type="checkbox" disabled={!provider} checked={value.ai_analysis} onChange={event => onChange({ ...value, ai_analysis: event.target.checked })} />
-      <ScanLine size={18} />
-      <span><strong>{provider ? `Анализ с ${provider.label}` : 'Анализ с ИИ'}</strong>
-        <small>Провайдер получит краткие фрагменты текста, названия, контекст слайдов и сведения о кандидатах. При включённом онлайн-поиске модель составит запросы и поможет выбрать замены. {provider?.verify_tls === false && 'Проверка сертификата МАИ отключена. '}Ключ можно подключить в <a href="#/settings">настройках</a>.</small>
-      </span>
-    </label>
   </fieldset>
 }
 

@@ -181,6 +181,8 @@ export function AuditDetail({ id, onRerun, onDelete }: { id: number, onRerun: (i
     {back}
     <PageTitle title={audit.filename} description={`Проверка №${audit.id} · ${formatDate(audit.created_at)} · ${statusLabel(audit.status)}`} actions={downloadButtons} />
     {result?.image_review && <ImageReviewSection review={result.image_review} />}
+    <details className="panel result-panel evidence-details" open={!(result?.image_review?.items ?? []).some(item => item.rights)}>
+    <summary>Доказательства и подробности проверки</summary>
     <section className="panel result-panel verdict">
       <div className="section-heading"><h2>Оценка риска</h2><Risk value={assessment?.level ?? audit.risk_level} /></div>
       <p>{assessment?.reason ?? 'По этой проверке оценка риска отсутствует.'}</p>
@@ -217,6 +219,8 @@ export function AuditDetail({ id, onRerun, onDelete }: { id: number, onRerun: (i
         </section>
       </div>
     </div>
+
+    </details>
 
     <section className="panel result-panel manage-panel">
       <details>

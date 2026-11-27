@@ -43,6 +43,7 @@ def init_db() -> None:
             result_json TEXT
         )
         """)
+        conn.execute('CREATE TABLE IF NOT EXISTS pixabay_cache (cache_key TEXT PRIMARY KEY, value TEXT NOT NULL, expires INTEGER NOT NULL)')
         columns = {row["name"] for row in conn.execute("PRAGMA table_info(audits)")}
         for name, field_type in {"storage_id": "TEXT", "sha256": "TEXT", "size_bytes": "INTEGER"}.items():
             if name not in columns:

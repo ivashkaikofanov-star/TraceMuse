@@ -1,3 +1,5 @@
+import base64
+import binascii
 import re
 from io import BytesIO
 from pathlib import Path
@@ -11,7 +13,8 @@ from reportlab.lib.pagesizes import A4
 from reportlab.lib.styles import ParagraphStyle
 from reportlab.pdfbase import pdfmetrics
 from reportlab.pdfbase.ttfonts import TTFont
-from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer
+from reportlab.platypus import Image as PDFImage
+from reportlab.platypus import Paragraph, SimpleDocTemplate, Spacer, Table, TableStyle
 
 
 ASSETS = Path(__file__).with_name("assets")
@@ -161,109 +164,168 @@ def render_pdf(audit: dict) -> bytes:
         for warning in section.get("warnings", []):
             paragraph(warning, quiet)
 
+    def photo(encoded: str | None, width: float):
+        if isinstance(encoded, str) and len(encoded) <= 350_000:
+            try:
+                data = base64.b64decode(encoded, validate=True)
+                if data.startswith(bytes.fromhex("ffd8")):
+                    image = PDFImage(BytesIO(data))
+                    scale = min(width / image.imageWidth, 132 / image.imageHeight)
+                    image.drawWidth = image.imageWidth * scale
+                    image.drawHeight = image.imageHeight * scale
+                    image.hAlign = "CENTER"
+                    return image
+            except (binascii.Error, OSError, ValueError, ZeroDivisionError):
+                pass
+        return Paragraph("Предпросмотр отсутствует.", quiet)
+
     result = audit.get("result") or {}
     extraction = result.get("extraction") or {}
     assessment = result.get("assessment") or {}
     ai = result.get("ai") or {}
+    review = result.get("image_review") or {}
+    photo_report = any(item.get("rights") for item in review.get("items", []))
 
     paragraph("Отчёт о проверке", title)
     paragraph(audit.get("filename") or "Материал", subheading)
     fields({
         "id": audit.get("id"), "Дата проверки": audit.get("created_at"),
         "status": audit.get("status"), "format": extraction.get("format") or audit.get("format"),
-        "size_bytes": audit.get("size_bytes"), "sha256": audit.get("sha256") or extraction.get("sha256"),
+        "size_bytes": audit.get("size_bytes"), "sha256": None if photo_report else audit.get("sha256") or extraction.get("sha256"),
     })
-    if (review := result.get("image_review")) and review["status"] != "no_images":
-        paragraph("Что сделать с изображениями", heading)
-        paragraph(f"Карточек · {review['checked']} из {review['total']} уникальных изображений.")
+    if review and review["status"] != "no_images":
+        paragraph("Права на изображения", heading)
+        paragraph(f"Онлайн-поиск · {review['checked']} из {review['total']} уникальных изображений.")
         if review["status"] == "local_only":
             paragraph("Для поиска источников и замен включите онлайн-поиск при повторной проверке.")
         for item in review["items"]:
-            action = {"credit": "Добавьте подпись", "reuse": "Можно использовать по указанным условиям",
-                      "replace": "Предложена замена", "review": "Разрешение не подтверждено",
-                      "no_query": "Недостаточно признаков для поиска"}[item["status"]]
-            paragraph(f"{item['id']} · {action}", subheading)
-            paragraph(f"{', '.join(item['locations'])} · {item['name']}")
-            paragraph(item["reason"])
-            for key, label in (("source", "Найденный источник"), ("replacement", "Вариант на замену")):
-                if material := item.get(key):
-                    fields({label: material["title"], "url": material["url"], "match": material.get("match"),
-                            "Лицензия источника": material["license"]["name"], "license_url": material["license"].get("url"),
-                            "Файл замены": material.get("download_url") if key == "replacement" else None})
-            if credit := item.get("credit") or (item.get("replacement") or {}).get("credit"):
-                fields({"Готовая подпись": credit})
+            rights = item.get("rights")
+            choices = item.get("replacements", [item["replacement"]] if item.get("replacement") else [])
+            action = {"credit": "Добавьте подпись", "reuse": "Можно оставить без подписи",
+                      "replace": "Предложена замена", "review": "Разрешение не установлено",
+                      "no_query": "Недостаточно признаков для поиска"}.get(item["status"], "Условия использования")
+            if rights:
+                action = {"keep": "Можно оставить без подписи", "credit": "Можно оставить с подписью",
+                          "conditional": "Нужно соблюсти дополнительные условия",
+                          "restricted": "Коммерческое использование не разрешено",
+                          "unverified": "Разрешение не установлено"}[rights["action"]]
+            paragraph(f"{item['id']} · {action}", heading)
+            paragraph(f"{', '.join(item['locations'])} · {item['name']}", subheading)
+
+            labels = ["Исходное изображение"]
+            for material in choices:
+                if material.get("kind") == "no_credit":
+                    labels.append("Замена без подписи")
+                elif len(choices) > 1:
+                    labels.append("Более похожая замена с подписью")
+                else:
+                    labels.append("Вариант замены" if not material.get("kind") else "Замена с подписью")
+            if rights:
+                previews = [item.get("original_preview"), *(material.get("preview") for material in choices)]
+                width = (A4[0] - 112) / len(labels)
+                cells = [[Paragraph(escape(label), quiet), photo(encoded, width - 14)]
+                         for label, encoded in zip(labels, previews)]
+                grid = Table([cells], colWidths=[width] * len(cells), hAlign="LEFT")
+                grid.setStyle(TableStyle([("VALIGN", (0, 0), (-1, -1), "TOP"),
+                                          ("BOX", (0, 0), (-1, -1), 0.4, PAPER_LINE),
+                                          ("INNERGRID", (0, 0), (-1, -1), 0.4, PAPER_LINE)]))
+                story.append(grid)
+                story.append(Spacer(1, 7))
+                fields({"Что нашли": rights["label"]})
+                for line in (rights["detail"], rights["warning"], rights["changes"]):
+                    paragraph(line)
+            else:
+                paragraph(item["reason"])
+
+            if source := item.get("source"):
+                exact = not rights or source.get("match_kind") in {"bytes", "pixels"}
+                fields({"Страница исходника" if exact else "Похожая публикация": source["url"],
+                        "license_url": source["license"].get("url") if exact else None})
+            if (credit := item.get("credit")) and (not rights or rights["action"] != "keep"):
+                fields({"Готовая подпись к исходнику": credit})
+            for index, material in enumerate(choices, start=1):
+                paragraph(labels[index], subheading)
+                fields({"Название": material["title"], "url": material["url"],
+                        "Лицензия замены": material["license"]["name"], "license_url": material["license"].get("url"),
+                        "Файл замены": material.get("download_url"), "Готовая подпись": material.get("credit")})
+                paragraph(material["license"].get("usage_note", ""), quiet)
+            if rights and rights["action"] != "keep" and not any(m.get("kind") == "no_credit" for m in choices) and review["status"] != "local_only":
+                paragraph("Подходящая замена без подписи не найдена.", quiet)
             for match in item.get("web_matches", []) or []:
                 fields({"Совпадение в интернете": match["title"], "url": match["url"]})
 
-    paragraph("Оценка риска", heading)
-    paragraph(_label(assessment.get("level") or audit.get("risk_level")), subheading)
-    paragraph(assessment.get("reason", ""))
-    for key, label in (("confidence", "Уровень уверенности"), ("risks", "Обнаруженные риски")):
-        if key in assessment:
-            fields({label: assessment[key]})
-    for key, label in (("recommendations", "Рекомендации"), ("limitations", "Ограничения проверки")):
-        if assessment.get(key):
-            paragraph(label, subheading)
-            for item in assessment[key]:
-                if isinstance(item, dict):
-                    fields(item)
-                else:
-                    paragraph(f"• {item}")
-
-    paragraph("Источники и лицензии", heading)
-    findings(result.get("sources") or {})
-
-    paragraph("Правовые статусы в России", heading)
-    findings(result.get("legal") or {})
-
-    paragraph("Пояснения ИИ", heading)
-    paragraph(f"Статус · {_label(ai.get('status'))}")
-    if ai.get("provider"):
-        paragraph("Провайдер · МАИ" if ai["provider"] == "mai" else "Провайдер · DeepSeek", quiet)
-    paragraph(ai.get("summary", ""))
-    if ai.get("model"):
-        paragraph(ai["model"], quiet)
-    if ai.get("findings"):
-        for item in ai["findings"]:
-            fields(item)
-            story.append(Spacer(1, 5))
+    if photo_report:
+        paragraph("История поиска, хеши и извлечённые данные доступны в JSON-отчёте.", quiet)
     else:
-        for observation in ai.get("observations", []):
-            paragraph(observation)
-    for warning in ai.get("warnings", []):
-        paragraph(warning, quiet)
+        paragraph("Оценка риска", heading)
+        paragraph(_label(assessment.get("level") or audit.get("risk_level")), subheading)
+        paragraph(assessment.get("reason", ""))
+        for key, label in (("confidence", "Уровень уверенности"), ("risks", "Обнаруженные риски")):
+            if key in assessment:
+                fields({label: assessment[key]})
+        for key, label in (("recommendations", "Рекомендации"), ("limitations", "Ограничения проверки")):
+            if assessment.get(key):
+                paragraph(label, subheading)
+                for item in assessment[key]:
+                    if isinstance(item, dict):
+                        fields(item)
+                    else:
+                        paragraph(f"• {item}")
 
-    paragraph("Извлечённые данные", heading)
-    links = extraction.get("links", [])
-    if links:
-        paragraph("Ссылки", subheading)
-        for url in links:
-            story.append(Paragraph(_link(url), body))
-    if metadata := extraction.get("metadata"):
-        fields({"Метаданные": metadata})
-    if images := extraction.get("images"):
-        shown = sorted(images, key=lambda image: not image.get("logo_references"))[:MAX_IMAGE_ROWS]
-        fields({"Изображения": shown})
-        if len(images) > len(shown):
-            paragraph(f"Показано изображений · {len(shown)} из {len(images)}. Весь извлечённый список доступен в JSON.", quiet)
-    if warnings := extraction.get("warnings"):
-        fields({"Ограничения извлечения": warnings})
-    if entries := extraction.get("entries"):
-        fields({"Содержимое архива": entries[:MAX_ARCHIVE_ROWS]})
-        if len(entries) > MAX_ARCHIVE_ROWS:
-            paragraph(f"Показано записей · {MAX_ARCHIVE_ROWS} из {len(entries)}. Полный список доступен в JSON.", quiet)
-    if text := extraction.get("text"):
-        paragraph("Извлечённый текст", subheading)
-        lines = text[:MAX_TEXT_CHARACTERS].splitlines()
-        for line in lines[:MAX_TEXT_LINES]:
-            if not line.strip():
-                story.append(Spacer(1, 4))
-            for offset in range(0, len(line), 3000):
-                paragraph(line[offset:offset + 3000])
-        if len(text) > MAX_TEXT_CHARACTERS or len(lines) > MAX_TEXT_LINES:
-            paragraph("Показан фрагмент. Весь извлечённый текст доступен в JSON.", quiet)
-    if not any(extraction.get(key) for key in ("text", "links", "metadata", "images", "entries", "warnings")):
-        paragraph("Извлечённые данные отсутствуют.", quiet)
+        paragraph("Источники и лицензии", heading)
+        findings(result.get("sources") or {})
+
+        paragraph("Правовые статусы в России", heading)
+        findings(result.get("legal") or {})
+
+        paragraph("Пояснения ИИ", heading)
+        paragraph(f"Статус · {_label(ai.get('status'))}")
+        if ai.get("provider"):
+            paragraph("Провайдер · МАИ" if ai["provider"] == "mai" else "Провайдер · DeepSeek", quiet)
+        paragraph(ai.get("summary", ""))
+        if ai.get("model"):
+            paragraph(ai["model"], quiet)
+        if ai.get("findings"):
+            for item in ai["findings"]:
+                fields(item)
+                story.append(Spacer(1, 5))
+        else:
+            for observation in ai.get("observations", []):
+                paragraph(observation)
+        for warning in ai.get("warnings", []):
+            paragraph(warning, quiet)
+
+        paragraph("Извлечённые данные", heading)
+        links = extraction.get("links", [])
+        if links:
+            paragraph("Ссылки", subheading)
+            for url in links:
+                story.append(Paragraph(_link(url), body))
+        if metadata := extraction.get("metadata"):
+            fields({"Метаданные": metadata})
+        if images := extraction.get("images"):
+            shown = sorted(images, key=lambda image: not image.get("logo_references"))[:MAX_IMAGE_ROWS]
+            fields({"Изображения": shown})
+            if len(images) > len(shown):
+                paragraph(f"Показано изображений · {len(shown)} из {len(images)}. Весь извлечённый список доступен в JSON.", quiet)
+        if warnings := extraction.get("warnings"):
+            fields({"Ограничения извлечения": warnings})
+        if entries := extraction.get("entries"):
+            fields({"Содержимое архива": entries[:MAX_ARCHIVE_ROWS]})
+            if len(entries) > MAX_ARCHIVE_ROWS:
+                paragraph(f"Показано записей · {MAX_ARCHIVE_ROWS} из {len(entries)}. Полный список доступен в JSON.", quiet)
+        if text := extraction.get("text"):
+            paragraph("Извлечённый текст", subheading)
+            lines = text[:MAX_TEXT_CHARACTERS].splitlines()
+            for line in lines[:MAX_TEXT_LINES]:
+                if not line.strip():
+                    story.append(Spacer(1, 4))
+                for offset in range(0, len(line), 3000):
+                    paragraph(line[offset:offset + 3000])
+            if len(text) > MAX_TEXT_CHARACTERS or len(lines) > MAX_TEXT_LINES:
+                paragraph("Показан фрагмент. Весь извлечённый текст доступен в JSON.", quiet)
+        if not any(extraction.get(key) for key in ("text", "links", "metadata", "images", "entries", "warnings")):
+            paragraph("Извлечённые данные отсутствуют.", quiet)
 
     def footer(canvas, document) -> None:
         width, _ = A4

@@ -56,14 +56,17 @@ interface EvidenceSection {
   [key: string]: unknown
 }
 
-interface LicensedImage {
+export interface LicensedImage {
   title: string
   url: string
   download_url?: string
   author: string
-  license: { name: string, url?: string }
+  license: { name: string, url?: string, usage_note?: string }
   match?: string
+  match_kind?: 'bytes' | 'pixels' | 'similar'
   credit?: string
+  preview?: string
+  kind?: 'no_credit' | 'with_credit'
 }
 
 export interface ImageReview {
@@ -79,8 +82,18 @@ export interface ImageReview {
     locations: string[]
     status: 'credit' | 'reuse' | 'replace' | 'review' | 'no_query'
     reason: string
+    original_preview?: string
+    rights?: {
+      label: string
+      category: string
+      action: 'keep' | 'credit' | 'conditional' | 'restricted' | 'unverified'
+      detail: string
+      warning: string
+      changes: string
+    }
     source?: LicensedImage | null
     replacement?: LicensedImage
+    replacements?: LicensedImage[]
     credit?: string
     web_matches: Array<{ title: string, url: string, match: string }>
   }>
@@ -116,6 +129,7 @@ export interface Settings {
   ai: { provider: "deepseek" | "mai", label: string, model: string, configured: boolean, verify_tls: boolean }
   legal_registries: Registry[]
   reverse_search_configured?: boolean
+  pixabay_configured?: boolean
 }
 
 export interface Health {

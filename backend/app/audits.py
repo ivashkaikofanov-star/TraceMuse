@@ -216,9 +216,10 @@ def run_audit(stream: BinaryIO, raw_filename: str, online_search: bool, ai_analy
         if not size:
             raise ExtractionError('Файл пуст.')
         sha256 = digest.hexdigest()
-        previews = {} if online_search and reverse_search else None
+        previews = {}
         extracted = extract(pending, filename, previews=previews)
-        image_review = review_images(extracted, intended_use, online_search, ai_analysis, previews)
+        image_review = review_images(extracted, intended_use, online_search, ai_analysis,
+                                     previews if online_search and reverse_search else None, report_previews=previews)
         sources = search_sources(extracted, sha256, online_search)
         legal = check_legal(extracted)
         ai = analyze(extracted, sources, legal, ai_analysis, image_review=image_review)

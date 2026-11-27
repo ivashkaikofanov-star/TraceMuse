@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     mai_model: str = "deepseek-v4.1-flash"
     mai_tls_verify: bool = True
     google_vision_api_key: SecretStr = SecretStr("")
+    pixabay_api_key: SecretStr = SecretStr("")
     deepseek_api_key: SecretStr = SecretStr("")
     deepseek_model: str = "deepseek-flash"
     legal_snapshot_path: str = ""

@@ -51,8 +51,7 @@ with sync_playwright() as p:
         page.get_by_role('link', name='Новая проверка').last.click()
         expect(page.get_by_role('heading', name='Новая проверка')).to_be_visible()
         expect(page.get_by_role('checkbox', name='Поиск источников онлайн')).not_to_be_checked()
-        expect(page.get_by_role('checkbox', name='Анализ с DeepSeek')).not_to_be_checked()
-        page.get_by_label('Планируемое использование').select_option('commercial')
+        expect(page.get_by_label('Планируемое использование')).to_have_count(0)
         page.locator('#audit-files').set_input_files([fixture, broken])
 
         with page.expect_response(lambda response: response.url.endswith('/api/audits') and response.request.method == 'POST') as uploaded:

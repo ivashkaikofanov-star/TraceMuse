@@ -53,9 +53,10 @@ def test_model_selects_only_from_commercially_eligible_replacements(monkeypatch)
 
     def rank(items):
         assert [x['id'] for x in items[0]['candidates']] == [0, 1]
-        return {'I1': 1}
+        return {'I1:with_credit': 1}
 
     monkeypatch.setattr(rights, '_query', query)
+    monkeypatch.setattr(rights, '_candidate_photo', lambda *_: ('preview', 16))
     monkeypatch.setattr(rights, 'plan_image_searches', lambda *_: {
         'status': 'ok', 'queries': {'I1': {'replacement': 'ginger domestic cat'}},
     })
@@ -65,7 +66,8 @@ def test_model_selects_only_from_commercially_eligible_replacements(monkeypatch)
     assert item['status'] == 'replace' and review['model_ranked'] == 1
     assert item['replacement']['title'] == 'Ginger domestic cat 3.jpg'
     assert item['replacement']['license']['name'] == 'CC BY 4.0'
-    assert 'ограничивают' in item['reason']
+    assert item['rights']['action'] == 'restricted'
+    assert 'Подпись не поможет' in item['reason']
 
 
 def test_reverse_search_hit_never_supplies_a_license(monkeypatch):
@@ -144,3 +146,145 @@ def test_slide_relationship_locations_and_ephemeral_previews(tmp_path):
     assert media['placements'][1]['context'] == 'Ginger domestic cat'
     assert previews[media['sha256']].startswith(bytes.fromhex('ffd8'))
     assert 'previews' not in data
+
+
+def _photo(c="red"):
+    import base64
+    data = BytesIO()
+    Image.new('RGB', (180, 110), c).save(data, format='JPEG')
+    return base64.b64encode(data.getvalue()).decode('ascii')
+
+
+def _cc0_info(title, sha1):
+    info = image_info(title, sha1, declared='CC0')
+    info['extmetadata']['LicenseUrl']['value'] = 'https://creativecommons.org/publicdomain/zero/1.0/'
+    return info
+
+
+def test_credit_and_no_credit_replacement_are_independent(monkeypatch):
+    original = image_info('Ginger domestic cat original.jpg')
+    free = _cc0_info('Ginger domestic cat alternative.jpg', 'c' * 40)
+    with_credit = image_info('Ginger domestic cat close.jpg', 'd' * 40)
+
+    def query(_client, _deadline, params):
+        if 'aisha1' in params:
+            return {'allimages': [original]}
+        return {'pages': {str(n): {'title': data['canonicaltitle'], 'imageinfo': [data]}
+                          for n, data in enumerate([with_credit, free, original])}}
+
+    monkeypatch.setattr(rights, '_query', query)
+    monkeypatch.setattr(rights, '_candidate_photo', lambda *_: (_photo('blue'), 15))
+    item, = rights.review_images(extraction(), 'commercial', True, False)['items']
+    assert item['rights']['category'] == 'cc_by' and item['rights']['action'] == 'credit'
+    assert item['credit'] and 'может предъявить требования' in item['rights']['warning']
+    replacement, = item['replacements']
+    assert replacement['kind'] == 'no_credit'
+    assert 'credit' not in replacement
+    assert replacement['preview'] and replacement['license']['kind'] == 'cc0'
+
+
+def test_unknown_original_keeps_second_replacement_only_if_visually_closer(monkeypatch):
+    data = extraction()
+    data['images'][0]['name'] = 'ginger domestic cat.jpg'
+    free = _cc0_info('Ginger domestic cat alternative.jpg', 'c' * 40)
+    closer = image_info('Ginger domestic cat closer.jpg', 'd' * 40)
+
+    def query(_client, _deadline, params):
+        if 'aisha1' in params:
+            return {'allimages': []}
+        return {'pages': {str(n): {'title': image['canonicaltitle'], 'imageinfo': [image]}
+                          for n, image in enumerate([free, closer])}}
+
+    monkeypatch.setattr(rights, '_query', query)
+    monkeypatch.setattr(rights, '_candidate_photo', lambda _c, _d, _a, image: (
+        (_photo('green'), 28) if image['sha1'] == 'c' * 40 else (_photo('blue'), 13)
+    ))
+    item, = rights.review_images(data, 'commercial', True, False)['items']
+    assert item['rights']['category'] == 'unknown'
+    assert 'не установлено' in item['rights']['detail']
+    assert [candidate['kind'] for candidate in item['replacements']] == ['no_credit', 'with_credit']
+    assert 'credit' not in item['replacements'][0]
+    assert 'Example Author' in item['replacements'][1]['credit']
+    monkeypatch.setattr(rights, '_candidate_photo', lambda *_: (_photo(), 22))
+    item, = rights.review_images(data, 'commercial', True, False)['items']
+    assert [candidate['kind'] for candidate in item['replacements']] == ['no_credit']
+
+
+def test_pdf_embeds_original_and_both_replacement_photos(monkeypatch):
+    import base64
+    from pypdf import PdfReader
+    from app.report import render_pdf
+
+    data = extraction()
+    data['images'][0]['name'] = 'ginger domestic cat.jpg'
+    free = _cc0_info('Ginger domestic cat alternative.jpg', 'c' * 40)
+    closer = image_info('Ginger domestic cat closer.jpg', 'd' * 40)
+
+    def query(_client, _deadline, params):
+        if 'aisha1' in params:
+            return {}
+        return {'pages': {str(n): {'title': image['canonicaltitle'], 'imageinfo': [image]}
+                          for n, image in enumerate([free, closer])}}
+
+    monkeypatch.setattr(rights, '_query', query)
+    monkeypatch.setattr(rights, '_candidate_photo', lambda _c, _d, _a, image: (
+        (_photo('green'), 28) if image['sha1'] == 'c' * 40 else (_photo('blue'), 13)
+    ))
+    review = rights.review_images(data, 'commercial', True, False,
+                                  report_previews={SHA256: base64.b64decode(_photo('red'))})
+    report = PdfReader(BytesIO(render_pdf({'filename': 'Пример.pptx', 'result': {
+        'image_review': review, 'extraction': data,
+    }})))
+    text = ' '.join(' '.join(page.extract_text().split()) for page in report.pages)
+    assert sum(len(page.images) for page in report.pages) == 3
+    assert 'Условия не найдены или есть только перепечатка' in text
+    assert 'Замена без подписи' in text and 'Более похожая замена с подписью' in text
+    assert 'SHA-256' not in text
+
+
+def test_sharealike_and_cc0_explain_terms_for_original(monkeypatch):
+    sharealike = image_info('Ginger domestic cat.jpg', license_path='by-sa', declared='CC BY-SA 4.0')
+    monkeypatch.setattr(rights, '_query', lambda _c, _d, params: {'allimages': [sharealike]} if 'aisha1' in params else {})
+    original, = rights.review_images(extraction(), 'commercial', True, False)['items']
+    assert original['rights']['category'] == 'cc_by_sa'
+    assert original['rights']['action'] == 'credit'
+    assert 'ShareAlike' in original['rights']['changes']
+    modified, = rights.review_images(extraction(), 'commercial_modified', True, False)['items']
+    assert modified['rights']['action'] == 'conditional' and 'credit' not in modified
+
+    free = _cc0_info('Ginger domestic cat.jpg', SHA1)
+    monkeypatch.setattr(rights, '_query', lambda *_: {'allimages': [free]})
+    item, = rights.review_images(extraction(), 'commercial', True, False)['items']
+    assert item['rights']['action'] == 'keep' and item['rights']['category'] == 'cc0'
+    assert 'credit' not in item and not item['replacements']
+
+
+def test_pixabay_stock_terms_and_daily_cache(monkeypatch, tmp_path):
+    import json
+    from time import monotonic
+    from app import pixabay
+    from app.db import init_db
+    from app.photo_license import commercial_conditions
+
+    monkeypatch.setattr(settings, 'database_path', str(tmp_path / 'test.sqlite3'))
+    monkeypatch.setattr(settings, 'pixabay_api_key', SecretStr('private-test-key'))
+    init_db()
+    calls = []
+
+    def load(_client, endpoint, params, *_):
+        assert endpoint == 'https://pixabay.com/api/'
+        assert params['key'] == 'private-test-key'
+        calls.append(endpoint)
+        return json.dumps({'hits': [{'pageURL': 'https://pixabay.com/photos/cat-12345/', 'id': 12345,
+                                      'user': 'Example', 'tags': 'cat, animal',
+                                      'webformatURL': 'https://cdn.pixabay.com/photo/2025/cat.jpg'}]}).encode()
+
+    monkeypatch.setattr(pixabay, '_read', load)
+    one, = pixabay.lookup(None, monotonic() + 5, image_id='12345')
+    repeated, = pixabay.lookup(None, monotonic() + 5, image_id='12345')
+    assert one == repeated and len(calls) == 1
+    rights_record = commercial_conditions([pixabay.material(one) | {'match_kind': 'pixels'}],
+                                          branded=False, modified=False)
+    assert rights_record['action'] == 'keep' and rights_record['category'] == 'stock'
+    assert 'перепродажу' in rights_record['warning']
+    assert 'private-test-key' not in str(one)
