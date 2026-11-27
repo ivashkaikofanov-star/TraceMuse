@@ -1,0 +1,42 @@
+{
+  "checked_at": "2026-11-27T16:27:08+00:00",
+  "endpoint": "https://mcp.context7.com/mcp",
+  "server": {
+    "name": "Context7",
+    "version": "4.9.1"
+  },
+  "protocol_version": "2025-03-26",
+  "tools_list": [
+    "query-docs",
+    "resolve-library-id"
+  ],
+  "calls": [
+    {
+      "name": "resolve-library-id",
+      "arguments": {
+        "libraryName": "FastAPI",
+        "query": "FastAPI official Python documentation for UploadFile multipart form uploads and multiple files."
+      },
+      "library_id": "/websites/fastapi_tiangolo"
+    },
+    {
+      "name": "query-docs",
+      "arguments": {
+        "libraryId": "/websites/fastapi_tiangolo",
+        "query": "How do I receive multiple files with list[UploadFile] in a multipart/form-data request and read them in bounded chunks using the UploadFile API?",
+        "language": "Python"
+      },
+      "source_urls": [
+        "https://fastapi.tiangolo.com/reference/uploadfile/",
+        "https://fastapi.tiangolo.com/tutorial/request-files/"
+      ],
+      "excerpts": [
+        "- `read(size)`: Reads `size` (`int`) bytes/characters of the file.",
+        "async read(size=-1)",
+        "read(size=-1)",
+        "async def create_upload_files(files: list[UploadFile]):",
+        "async def create_upload_files(files: list[UploadFile]):"
+      ]
+    }
+  ]
+}
