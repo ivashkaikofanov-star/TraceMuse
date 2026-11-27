@@ -12,6 +12,7 @@ from pydantic import SecretStr
 from pypdf import PdfReader
 
 from app import deepseek
+from app.config import Settings
 from app.report import render_pdf
 
 
@@ -52,16 +53,22 @@ class DeepSeekTests(unittest.TestCase):
             self.assertEqual(deepseek.test_connection()["status"], "not_configured")
             client.assert_not_called()
 
-    def test_connection_checks_the_configured_model(self):
+    def test_flash_catalog_accepts_default_and_legacy_settings(self):
         def provider(request):
             self.assertEqual(str(request.url), "https://api.deepseek.com/models")
             self.assertEqual(request.headers["authorization"], "Bearer sk-test-key")
-            return httpx.Response(200, json={"data": [{"id": deepseek.settings.deepseek_model}]})
+            return httpx.Response(200, json={"data": [{"id": "deepseek-flash"}, {"id": "deepseek-v4-pro"}]})
 
-        with patch.object(deepseek, "_key", return_value="sk-test-key"), patch.object(
-            deepseek, "_client", return_value=self.mock_client(provider)
-        ):
-            self.assertEqual(deepseek.test_connection()["status"], "ok")
+        for model in (None, "deepseek-v4-flash", "deepseek-v4-flash-vision-exp", "deepseek-v4-pro"):
+            with self.subTest(model=model), patch.dict(os.environ, {}, clear=True):
+                if model:
+                    os.environ["DEEPSEEK_MODEL"] = model
+                with patch.object(deepseek, "settings", Settings(_env_file=None)), patch.object(
+                    deepseek, "_key", return_value="sk-test-key"
+                ), patch.object(deepseek, "_client", return_value=self.mock_client(provider)):
+                    expected = "deepseek-v4-pro" if model == "deepseek-v4-pro" else "deepseek-flash"
+                    self.assertEqual(deepseek.settings.deepseek_model, expected)
+                    self.assertEqual(deepseek.test_connection()["status"], "ok")
 
     def test_provider_authentication_error_does_not_echo_the_body(self):
         def provider(_request):
@@ -79,6 +86,7 @@ class DeepSeekTests(unittest.TestCase):
             self.assertEqual(str(request.url), "https://api.deepseek.com/chat/completions")
             self.assertEqual(request.headers["authorization"], "Bearer sk-test-key")
             body = json.loads(request.content)
+            self.assertEqual(body["model"], "deepseek-flash")
             self.assertEqual(body["response_format"], {"type": "json_object"})
             self.assertNotIn("unshared-filename.docx", str(body))
             self.assertNotIn("unshared-exif", str(body))
@@ -103,7 +111,9 @@ class DeepSeekTests(unittest.TestCase):
             }
             return httpx.Response(200, json={"choices": [{"message": {"content": json.dumps(answer)}}]})
 
-        with patch.object(deepseek, "_key", return_value="sk-test-key"), patch.object(
+        with patch.object(deepseek, "settings", Settings(_env_file=None, deepseek_model="deepseek-v4-flash")), patch.object(
+            deepseek, "_key", return_value="sk-test-key"
+        ), patch.object(
             deepseek, "_client", return_value=self.mock_client(provider)
         ):
             result = deepseek.analyze({

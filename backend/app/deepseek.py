@@ -149,7 +149,7 @@ def test_connection() -> dict:
         if not isinstance(entries, list):
             raise ValueError("DeepSeek не вернул список моделей.")
         if not any(isinstance(item, dict) and item.get("id") == settings.deepseek_model for item in entries):
-            raise ValueError("Настроенная модель недоступна для этого ключа.")
+            raise ValueError("DeepSeek принял ключ, но настроенной модели нет в списке API. Проверьте DEEPSEEK_MODEL.")
     except (OSError, UnicodeError):
         return {"status": "error", "message": "Не удалось прочитать локальный ключ. Сохраните его повторно."}
     except ValueError as exc:
