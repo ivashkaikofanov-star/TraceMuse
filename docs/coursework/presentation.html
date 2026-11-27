@@ -1,0 +1,294 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>TraceMuse · Защита курсовой МАИ</title>
+  <style>
+    :root {
+      color-scheme: dark;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      --page: #0c0d10;
+      --panel: #131418;
+      --line: #323238;
+      --accent: #ff804b;
+      --text: #f4f1ec;
+      --muted: #bdb9b2;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      margin: 0;
+      display: grid;
+      min-height: 100svh;
+      background: var(--page);
+      color: var(--text);
+      grid-template-rows: 1fr auto;
+    }
+
+    main {
+      width: min(1120px, 100%);
+      margin: auto;
+      padding: clamp(1rem, 3vw, 2.5rem);
+    }
+
+    [hidden] { display: none !important; }
+
+    .slide {
+      display: flex;
+      min-height: min(42rem, calc(100svh - 10rem));
+      flex-direction: column;
+      justify-content: center;
+      margin: 0 0 1rem;
+      padding: clamp(1.45rem, 6vw, 6rem);
+      border: 1px solid var(--line);
+      border-radius: 1.1rem;
+      background: var(--panel);
+    }
+
+    .cover { border-top: 3px solid var(--accent); }
+
+    .kicker {
+      margin: 0 0 1.4rem;
+      color: var(--accent);
+      font-size: clamp(.81rem, 1.6vw, 1rem);
+      font-weight: 700;
+      letter-spacing: .1em;
+      text-transform: uppercase;
+    }
+
+    h1, h2 { text-wrap: balance; }
+
+    h1 {
+      margin: 0;
+      font-size: clamp(3rem, 11vw, 8rem);
+      font-weight: 780;
+      letter-spacing: -.085em;
+      line-height: .9;
+    }
+
+    h2 {
+      margin: 0 0 clamp(1.1rem, 3vw, 2.1rem);
+      font-size: clamp(2rem, 5.5vw, 4.5rem);
+      line-height: 1.02;
+      letter-spacing: -.05em;
+    }
+
+    .lead {
+      max-width: 36ch;
+      margin: 1.45rem 0;
+      color: var(--muted);
+      font-size: clamp(1.25rem, 3vw, 2.5rem);
+      line-height: 1.23;
+      text-wrap: pretty;
+    }
+
+    p, li { font-size: clamp(1rem, 2.1vw, 1.4rem); line-height: 1.48; }
+    p { max-width: 64ch; }
+
+    ol, ul { margin: 0; padding-inline-start: 1.5em; }
+    li + li { margin-top: .75em; }
+    li::marker { color: var(--accent); font-weight: 700; }
+
+    small { color: var(--muted); font-size: .95rem; line-height: 1.4; }
+    .cover small { margin-top: 2rem; }
+    a { color: var(--accent); text-underline-offset: .2em; }
+    code { font-size: .86em; overflow-wrap: anywhere; }
+
+    .flow {
+      display: grid;
+      grid-template-columns: repeat(3, 1fr);
+      gap: .85rem;
+      list-style: none;
+      padding: 0;
+    }
+
+    .flow li {
+      display: grid;
+      align-content: start;
+      gap: .35rem;
+      margin: 0;
+      padding: 1rem;
+      border-top: 1px solid var(--accent);
+      background: var(--page);
+    }
+
+    .flow span { color: var(--muted); font-size: .9em; }
+
+    nav {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: .6rem;
+      padding: 0 1rem 1rem;
+    }
+
+    button {
+      min-width: 2.75rem;
+      min-height: 2.75rem;
+      border: 1px solid var(--line);
+      border-radius: .45rem;
+      background: var(--panel);
+      color: var(--text);
+      font: inherit;
+    }
+
+    button:hover:enabled { border-color: var(--accent); cursor: pointer; }
+    button:disabled { color: var(--muted); opacity: .5; }
+    :is(a, button):focus-visible { outline: 3px solid var(--accent); outline-offset: 4px; }
+
+    output {
+      min-width: 6ch;
+      color: var(--muted);
+      font-variant-numeric: tabular-nums;
+      text-align: center;
+    }
+
+    @media (max-width: 620px) {
+      .slide { min-height: auto; }
+      .flow { grid-template-columns: 1fr; }
+    }
+
+    @page { size: A4 landscape; margin: 12mm; }
+
+    @media print {
+      :root {
+        color-scheme: light;
+        --page: white;
+        --panel: white;
+        --text: #171717;
+        --muted: #4a4a4a;
+        --accent: #9c3b15;
+        --line: #bbb;
+      }
+
+      body { display: block; }
+      main { width: 100%; padding: 0; }
+      nav { display: none; }
+      .slide, .slide[hidden] {
+        display: flex !important;
+        break-inside: avoid;
+        break-after: page;
+        min-height: 174mm;
+        margin: 0;
+        padding: 13mm;
+      }
+      .slide:last-child { break-after: auto; }
+    }
+  </style>
+</head>
+<body>
+  <main id="deck">
+    <section class="slide cover" id="s1" aria-labelledby="h1">
+      <p class="kicker">Курсовая работа · МАИ</p>
+      <h1 id="h1">TraceMuse</h1>
+      <p class="lead">Предварительная проверка цифровых материалов перед публикацией</p>
+      <small>Автор · [ФИО, группа]<br>Руководитель · [ФИО]<br>[Кафедра, дисциплина, дата защиты]</small>
+    </section>
+
+    <section class="slide" id="s2" aria-labelledby="h2">
+      <h2 id="h2">Какие материалы можно опубликовать?</h2>
+      <p>Текст, изображения и ссылки в презентации или на сайте могут происходить из разных источников. Автору нужно восстановить происхождение каждого материала и сверить условия его использования.</p>
+      <p>Сценарий рассчитан на студентов, дизайнеров, разработчиков и авторов контента. Пользовательское исследование запланировано. <a href="user_research.md">План интервью</a></p>
+    </section>
+
+    <section class="slide" id="s3" aria-labelledby="h3">
+      <h2 id="h3">От файла к отчёту</h2>
+      <ol class="flow">
+        <li><strong>Загрузка</strong><span>PDF, DOCX, PPTX, HTML, PNG, JPEG, WebP, SVG, ZIP</span></li>
+        <li><strong>Извлечение</strong><span>Текст, изображения, ссылки, метаданные и SHA-256</span></li>
+        <li><strong>Аудит</strong><span>Источники, сведения о лицензиях, правовой контекст и ограничения</span></li>
+      </ol>
+      <p>Отчёт можно сохранить как PDF или JSON. Результат остаётся доступен в истории.</p>
+    </section>
+
+    <section class="slide" id="s4" aria-labelledby="h4">
+      <h2 id="h4">Локальная архитектура</h2>
+      <ol class="flow">
+        <li><strong>React + TypeScript</strong><span>Проверки, история и настройки</span></li>
+        <li><strong>FastAPI</strong><span>Приём файлов, обработчики форматов и формирование отчёта</span></li>
+        <li><strong>SQLite и файлы</strong><span>Хранение отчётов и исходных материалов</span></li>
+      </ol>
+      <p>Поиск в Wikimedia Commons и обращение к DeepSeek включаются отдельно перед проверкой.</p>
+    </section>
+
+    <section class="slide" id="s5" aria-labelledby="h5">
+      <h2 id="h5">На чём основан вывод</h2>
+      <ul>
+        <li>У найденного источника есть ссылка, основание совпадения и дата проверки.</li>
+        <li>Условия лицензии и авторство показываются в пределах сведений источника.</li>
+        <li>Проверка реестра, применимость ограничений и необходимость маркировки рассматриваются отдельно.</li>
+        <li>Отчёт объясняет, где требуется ручная проверка.</li>
+      </ul>
+      <p><a href="../../skills/tracemuse-audit/SKILL.md">Правила TraceMuse Audit Skill</a></p>
+    </section>
+
+    <section class="slide" id="s6" aria-labelledby="h6">
+      <h2 id="h6">Как использовали MCP</h2>
+      <p>27 ноября 2026 года инструменты Context7 <code>resolve-library-id</code> и <code>query-docs</code> вернули документацию FastAPI о приёме нескольких файлов и порционном чтении <code>UploadFile</code>.</p>
+      <p>Ссылки и выдержки переданы разработчику API. Сохранён протокол с аргументами и датой вызова. <a href="mcp_evidence.json">JSON протокола</a></p>
+      <p>Повторить из корня репозитория в PowerShell можно командой <code>py -3.13 .\tools\check_mcp.py</code>.</p>
+    </section>
+
+    <section class="slide" id="s7" aria-labelledby="h7">
+      <h2 id="h7">Демонстрация проверки</h2>
+      <ol>
+        <li>Загрузить учебный HTML-файл и открыть извлечённые данные.</li>
+        <li>Просмотреть найденную ссылку, оценку и основания для ручной проверки.</li>
+        <li>Скачать PDF и JSON, затем найти проверку в истории.</li>
+      </ol>
+      <p><a href="demo-material.html">Файл демонстрации</a> · <a href="defense.md">Сценарий защиты</a></p>
+    </section>
+
+    <section class="slide" id="s8" aria-labelledby="h8">
+      <h2 id="h8">Проверки и границы применения</h2>
+      <ul>
+        <li>Проверки реализации и участие разработчиков зафиксированы в репозитории. <a href="../../PROJECT_STATUS.md">Статус</a> · <a href="agent_handoffs.md">Передачи результатов</a></li>
+        <li>Вывод по правовым требованиям зависит от актуальности источника и контекста публикации.</li>
+        <li>Внешний поиск охватывает доступный каталог. Для окончательного решения может понадобиться страница оригинала или разрешение правообладателя.</li>
+      </ul>
+    </section>
+  </main>
+
+  <nav id="controls" aria-label="Навигация по презентации" hidden>
+    <button type="button" id="prev" aria-label="Предыдущий слайд">←</button>
+    <output id="position" aria-live="polite"></output>
+    <button type="button" id="next" aria-label="Следующий слайд">→</button>
+  </nav>
+
+  <script>
+    const slides = [...document.querySelectorAll('.slide')]
+    const controls = document.getElementById('controls')
+    const previous = document.getElementById('prev')
+    const next = document.getElementById('next')
+    const position = document.getElementById('position')
+    let current = 0
+
+    function render() {
+      const target = slides.findIndex(slide => '#' + slide.id === location.hash)
+      current = Math.max(0, target)
+      slides.forEach((slide, index) => { slide.hidden = index !== current })
+      position.value = (current + 1) + ' / ' + slides.length
+      previous.disabled = current === 0
+      next.disabled = current === slides.length - 1
+      window.scrollTo(0, 0)
+    }
+
+    function navigate(index) {
+      if (index >= 0 && index < slides.length) location.hash = slides[index].id
+    }
+
+    previous.addEventListener('click', () => navigate(current - 1))
+    next.addEventListener('click', () => navigate(current + 1))
+    window.addEventListener('hashchange', render)
+    window.addEventListener('keydown', event => {
+      if (event.altKey || event.ctrlKey || event.metaKey) return
+      if (event.key === 'ArrowLeft') navigate(current - 1)
+      if (event.key === 'ArrowRight') navigate(current + 1)
+    })
+    controls.hidden = false
+    render()
+  </script>
+</body>
+</html>

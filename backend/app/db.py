@@ -1,16 +1,31 @@
 import sqlite3
+from contextlib import contextmanager
 from pathlib import Path
-from .config import settings
+
+from .config import BACKEND_DIR, settings
 
 def database_path() -> Path:
     path = Path(settings.database_path)
     if not path.is_absolute():
-        path = Path(__file__).resolve().parents[1] / path
+        path = BACKEND_DIR / path
     path.parent.mkdir(parents=True, exist_ok=True)
     return path
 
+@contextmanager
+def connect():
+    conn = sqlite3.connect(database_path(), timeout=10)
+    conn.row_factory = sqlite3.Row
+    try:
+        with conn:
+            yield conn
+    finally:
+        conn.close()
+
+
 def init_db() -> None:
-    with sqlite3.connect(database_path()) as conn:
+    with connect() as conn:
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("BEGIN IMMEDIATE")
         conn.execute("""
         CREATE TABLE IF NOT EXISTS projects (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -28,4 +43,7 @@ def init_db() -> None:
             result_json TEXT
         )
         """)
-        conn.commit()
+        columns = {row["name"] for row in conn.execute("PRAGMA table_info(audits)")}
+        for name, field_type in {"storage_id": "TEXT", "sha256": "TEXT", "size_bytes": "INTEGER"}.items():
+            if name not in columns:
+                conn.execute(f"ALTER TABLE audits ADD COLUMN {name} {field_type}")

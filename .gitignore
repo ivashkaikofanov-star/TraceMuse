@@ -8,5 +8,8 @@ dist/
 backend/data/*
 !backend/data/.gitkeep
 *.sqlite3
+*.sqlite3-*
 *.db
 .DS_Store
+.pytest_cache/
+*.tsbuildinfo
