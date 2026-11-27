@@ -139,6 +139,8 @@ def assessment(extraction: dict, sources: dict, legal: dict, intended_use: str) 
                                                term.get('attribution_required') is False and not term.get('restrictions')
                                                for term in exact_terms)
     legal_matches = any(item.get('status') == 'local_snapshot_match' for item in legal.get('items', []))
+    brand_graphic = any(item.get('method') == 'brand_visual' for item in candidates)
+    brand_mention = any(item.get('method') == 'brand_text' for item in candidates)
     standalone_image = extraction.get('format') in {'PNG', 'JPG', 'JPEG', 'WEBP'} and len(extraction.get('images', [])) == 1
     level = 'insufficient_data'
     reason = 'Собранных сведений недостаточно для оценки условий использования материала.'
@@ -152,6 +154,9 @@ def assessment(extraction: dict, sources: dict, legal: dict, intended_use: str) 
     elif restrictions or legal_matches:
         level = 'manual_review'
         reason = 'Обнаружены сведения об условиях использования или совпадения с записями правовых реестров. Их применимость зависит от контекста.'
+    elif brand_graphic:
+        level = 'manual_review'
+        reason = 'Найдено сходство с образцом логотипа. Условия использования знака нужно проверять отдельно.'
     elif attribution:
         level = 'medium'
         reason = 'Лицензия точного совпадения предусматривает условия атрибуции или распространения производных работ.'
@@ -162,7 +167,7 @@ def assessment(extraction: dict, sources: dict, legal: dict, intended_use: str) 
     elif exact_terms:
         level = 'manual_review'
         reason = 'Найдено точное совпадение. Нужна проверка лицензии, полномочий автора и всех компонентов файла.'
-    elif candidates:
+    elif any(item.get('method') != 'brand_text' for item in candidates):
         recommendations.append('Откройте кандидаты и проверьте, относится ли найденное совпадение к вашему материалу.')
     if restrictions:
         risks.append('Каталог указывает ограничения на коммерческое использование или изменение кандидата.')
@@ -172,6 +177,11 @@ def assessment(extraction: dict, sources: dict, legal: dict, intended_use: str) 
         recommendations.append('Сверьте название, дату и применимость требования по ссылке на официальный реестр.')
     if exact_terms:
         recommendations.append('Откройте найденный материал и сверьте условия из каталога с заявлением правообладателя.')
+    if brand_graphic:
+        risks.append('Условия использования найденных логотипов не установлены.')
+        recommendations.append('Сверьте найденные обозначения с правилами бренда для вашего сценария использования.')
+    if brand_mention:
+        recommendations.append('Для публикации отдельно проверьте происхождение материала и права на фотографии и иллюстрации.')
     if not risks and level != 'low':
         risks.append('Условия использования всего материала не подтверждены.')
     limitations = [

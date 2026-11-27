@@ -25,6 +25,7 @@ PAPER_LINE = colors.HexColor("#DDD7D1")
 MAX_TEXT_CHARACTERS = 24_000
 MAX_TEXT_LINES = 480
 MAX_ARCHIVE_ROWS = 100
+MAX_IMAGE_ROWS = 15
 PLAIN_TEXT = re.compile(r"[\x00-\x08\x0B-\x0C\x0E-\x1F\x7F-\x9F\u202A-\u202E\u2066-\u2069\uD800-\uDFFF\uFFFE\uFFFF]")
 
 STATUS = {
@@ -41,6 +42,11 @@ STATUS = {
     "local_snapshot_no_match": "Совпадений в локальном снимке нет",
     "catalog_declaration": "Заявление в каталоге", "unestablished": "Не установлена",
     "insufficient_data": "Недостаточно данных", "insufficient": "Недостаточно данных",
+    "brand_visual": "Сопоставление со справочным логотипом",
+    "brand_text": "Упоминание бренда в тексте",
+    "identical_image": "Совпадение SHA-1",
+    "visual_similarity": "Визуальное сходство",
+    "embedded_url": "Ссылка из материала", "commons_link": "Ссылка на Wikimedia Commons из материала",
 }
 FIELD = {
     "id": "ID", "name": "Название", "title": "Название", "location": "Расположение",
@@ -62,6 +68,7 @@ FIELD = {
     "author": "Автор", "description": "Описание", "keywords": "Ключевые слова",
     "created": "Дата создания", "modified": "Дата изменения", "pages": "Страницы",
     "slides": "Слайды", "encoding": "Кодировка", "source": "Источник",
+    "logo_references": "Справочные логотипы", "brand": "Бренд", "part": "Номер фрагмента",
 }
 
 
@@ -208,9 +215,15 @@ def render_pdf(audit: dict) -> bytes:
         paragraph("Ссылки", subheading)
         for url in links:
             story.append(Paragraph(_link(url), body))
-    for key, label in (("metadata", "Метаданные"), ("images", "Изображения"), ("warnings", "Ограничения извлечения")):
-        if extraction.get(key):
-            fields({label: extraction[key]})
+    if metadata := extraction.get("metadata"):
+        fields({"Метаданные": metadata})
+    if images := extraction.get("images"):
+        shown = sorted(images, key=lambda image: not image.get("logo_references"))[:MAX_IMAGE_ROWS]
+        fields({"Изображения": shown})
+        if len(images) > len(shown):
+            paragraph(f"Показано изображений · {len(shown)} из {len(images)}. Весь извлечённый список доступен в JSON.", quiet)
+    if warnings := extraction.get("warnings"):
+        fields({"Ограничения извлечения": warnings})
     if entries := extraction.get("entries"):
         fields({"Содержимое архива": entries[:MAX_ARCHIVE_ROWS]})
         if len(entries) > MAX_ARCHIVE_ROWS:

@@ -22,6 +22,8 @@ from PIL import Image
 from pypdf import PdfReader, apply_configuration
 from pypdf.errors import PyPdfError
 
+from .visual import identify_graphics
+
 MIB = 1024 * 1024
 MAX_TEXT = 80_000
 MAX_LINKS = 150
@@ -202,6 +204,8 @@ def _image_record(stream: BinaryIO, name: str, expected: str | None = None) -> d
     with Image.open(stream, formats=formats) as image:
         record['phash'] = image_phash(image)
         record['phash_algorithm'] = 'dct64'
+        if matches := identify_graphics(image, split=True):
+            record['logo_references'] = matches
         if expected:
             record['metadata'] = {
                 label: _short(image.info[field])

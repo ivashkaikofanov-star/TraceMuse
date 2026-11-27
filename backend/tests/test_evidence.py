@@ -10,7 +10,8 @@ import httpx
 from PIL import Image, ImageDraw
 
 from app.evidence import LEGAL_REGISTRIES, check_legal, search_sources
-from app.extraction import image_phash
+from app.extraction import extract, image_phash
+from app.visual import graphic_signatures
 
 
 SHA256 = "a" * 64
@@ -118,8 +119,40 @@ class SourcesTests(unittest.TestCase):
             result = search_sources(extraction, "", True)
         self.assertEqual(len(outbound), 3)
         self.assertNotIn(phash, " ".join(outbound))
-        self.assertEqual([item["method"] for item in result["items"]], ["visual_similarity", "catalog_candidate"])
-        self.assertEqual(result["items"][1]["license"]["status"], "unestablished")
+        self.assertEqual([item["method"] for item in result["items"]], ["visual_similarity"])
+        self.assertTrue(any("исключены" in warning for warning in result["warnings"]))
+
+    def test_unverified_catalog_hit_does_not_supply_a_license(self):
+        def response(_request):
+            return httpx.Response(200, json={"query": {"pages": {"4": {
+                "title": FILE_TITLE, "pageid": 4, "imageinfo": [{"extmetadata": META}],
+            }}}})
+
+        with self._commons(response):
+            result = search_sources({"text": "Пример презентации о Кока-Колы"}, "", True)
+        self.assertEqual(result["status"], "no_match")
+        self.assertEqual([(item["title"], item["method"]) for item in result["items"]], [("Coca-Cola", "brand_text")])
+        self.assertNotIn("license", result["items"][0])
+
+    def test_local_reference_splits_a_logo_sheet_and_ignores_unmatched_shapes(self):
+        with Image.new("RGB", (110, 100), "white") as reference:
+            ImageDraw.Draw(reference).polygon([(7, 92), (37, 18), (94, 53), (75, 92)], fill="black")
+            catalog = [{**graphic_signatures(reference)[0], "brand": "Example", "title": "Example mark", "url": COMMONS_URL}]
+            with Image.new("RGB", (470, 130), "white") as sheet:
+                sheet.paste(reference, (15, 14))
+                ImageDraw.Draw(sheet).ellipse((185, 13, 278, 109), fill="black")
+                ImageDraw.Draw(sheet).rectangle((340, 13, 441, 109), fill="black")
+                with TemporaryDirectory() as directory:
+                    path = Path(directory) / "sheet.jpg"
+                    sheet.save(path, quality=76)
+                    with patch("app.visual.reference_catalog", return_value=catalog):
+                        extraction = extract(path, path.name)
+
+        with patch("app.evidence.httpx.Client", side_effect=AssertionError("network accessed")):
+            result = search_sources(extraction, SHA256, False)
+        self.assertEqual([(item["title"], item["method"]) for item in result["items"]], [("Example mark", "brand_visual")])
+        self.assertIn("фрагмент", result["items"][0]["match"])
+        self.assertNotIn("license", result["items"][0])
 
     def test_catalog_unavailable_preserves_link(self):
         def response(_request):

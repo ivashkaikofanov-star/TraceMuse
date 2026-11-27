@@ -149,7 +149,7 @@ def test_connection() -> dict:
         if not isinstance(entries, list):
             raise ValueError("DeepSeek не вернул список моделей.")
         if not any(isinstance(item, dict) and item.get("id") == settings.deepseek_model for item in entries):
-            raise ValueError("Настроенная модель недоступна для этого ключа.")
+            raise ValueError("DeepSeek принял ключ, но настроенной модели нет в списке API. Проверьте DEEPSEEK_MODEL.")
     except (OSError, UnicodeError):
         return {"status": "error", "message": "Не удалось прочитать локальный ключ. Сохраните его повторно."}
     except ValueError as exc:
@@ -169,7 +169,12 @@ def _evidence(extraction: dict, sources: dict, legal: dict) -> list[dict]:
         for item in section.get("items", [])[:5]:
             value = {field: item[field] for field in fields if item.get(field)}
             if value:
-                label = "Кандидат в источники" if section is sources else "Сведения реестра"
+                label = "Сведения реестра"
+                if section is sources:
+                    label = {
+                        "brand_visual": "Справочный логотип, происхождение материала не установлено",
+                        "brand_text": "Упоминание бренда в тексте",
+                    }.get(item.get("method"), "Кандидат в источники")
                 records.append((label, json.dumps(value, ensure_ascii=False)[:850]))
     coverage = f"Поиск источников: {sources.get('status', 'unknown')}. Реестры: {legal.get('status', 'unknown')}."
     records.append(("Охват проверки", coverage))
