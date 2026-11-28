@@ -18,7 +18,7 @@ PROXY_HOSTS = frozenset({
     'au.pinterest.com', 'ca.pinterest.com', 'img.freepik.com', 'img.magnific.com',
     'www.magnific.com', 'www.freepik.com', 'iqtisadiyyat.az', 'www.goodfon.ru',
     'www.goodfon.com', 'images.pexels.com', 'www.pexels.com', 'images.unsplash.com',
-    'unsplash.com', 'commons.wikimedia.org', 'upload.wikimedia.org',
+    'unsplash.com', 'commons.wikimedia.org', 'upload.wikimedia.org', 'avatars.mds.yandex.net',
 })
 REDIRECTS = {301, 302, 303, 307, 308}
 HEADERS = {**HTTP_HEADERS, 'Accept-Encoding': 'identity'}

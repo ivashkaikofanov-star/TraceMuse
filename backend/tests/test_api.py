@@ -15,6 +15,7 @@ from app import deepseek, rights, web_images
 from app.main import app
 from app.audits import assessment, upload_directory
 from app.public_web import PublicResponse
+from app.reverse_search import SearchResult
 
 
 HTML = '<!doctype html><title>Курсовая</title><p>Проверка перед публикацией</p>' \
@@ -119,7 +120,7 @@ def test_source_presentation_verifies_link_without_granting_permission(isolated_
     files = [('files', ('photo.jpg', primary.getvalue())), ('reference', ('sources.pptx', reference.getvalue()))]
     with client() as session:
         assert session.post('/api/audits', files=files).status_code == 400
-        response = session.post('/api/audits', files=files, data={'online_search': 'true'})
+        response = session.post('/api/audits', files=files, data={'online_search': 'true', 'reverse_search': 'false'})
         assert response.status_code == 201, response.text
         audit_id = response.json()['items'][0]['id']
         audit_url = f'/api/audits/{audit_id}'
@@ -133,6 +134,24 @@ def test_source_presentation_verifies_link_without_granting_permission(isolated_
         assert len(list(upload_directory().glob('*.bin'))) == 1
         pdf = PdfReader(BytesIO(session.get(audit_url + '/report.pdf').content))
         assert 'Файл совпал' in ''.join(page.extract_text() for page in pdf.pages)
+
+
+def test_online_upload_runs_reverse_search_by_default(isolated_data, monkeypatch):
+    data = BytesIO()
+    Image.new('RGB', (120, 100), 'blue').save(data, format='JPEG')
+    attempts = [{'provider': 'yandex', 'status': 'no_results'}]
+    monkeypatch.setattr(rights, 'search_previews', lambda images: {
+        sha: SearchResult('no_results', [], attempts) for sha in images
+    })
+    monkeypatch.setattr(rights, '_query', lambda *_: {})
+    monkeypatch.setattr('app.audits.search_sources', lambda *_: {'status': 'complete', 'items': []})
+    with client() as session:
+        response = session.post('/api/audits', files={'files': ('photo.jpg', data.getvalue())}, data={'online_search': 'true'})
+        assert response.status_code == 201, response.text
+        audit_id = response.json()['items'][0]['id']
+        result = session.get(f'/api/audits/{audit_id}').json()['result']
+        assert result['options']['reverse_search'] is True
+        assert result['image_review']['items'][0]['reverse_attempts'] == [{'provider': 'Яндекс', 'status': 'no_results'}]
 
 
 def test_original_database_migration(isolated_data):

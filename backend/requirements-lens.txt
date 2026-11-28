@@ -1,0 +1,1 @@
+google-lens-pro==0.2.0

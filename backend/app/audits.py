@@ -197,7 +197,7 @@ def assessment(extraction: dict, sources: dict, legal: dict, intended_use: str) 
 
 
 def run_audit(stream: BinaryIO, raw_filename: str, online_search: bool, ai_analysis: bool,
-              intended_use: str = 'unspecified', reverse_search: bool = False, *,
+              intended_use: str = 'unspecified', reverse_search: bool | None = None, *,
               reference: tuple[str, list[str]] | None = None) -> dict:
     filename = display_filename(raw_filename)
     limit = settings.max_upload_mb * 1024 * 1024
@@ -219,8 +219,9 @@ def run_audit(stream: BinaryIO, raw_filename: str, online_search: bool, ai_analy
         sha256 = digest.hexdigest()
         previews = {}
         extracted = extract(pending, filename, previews=previews)
+        reverse_enabled = online_search and reverse_search is not False
         image_review = review_images(extracted, intended_use, online_search, ai_analysis,
-                                     previews if online_search and reverse_search else None,
+                                     previews if reverse_enabled else None,
                                      report_previews=previews, reference=reference)
         sources = search_sources(extracted, sha256, online_search)
         legal = check_legal(extracted)
@@ -228,7 +229,7 @@ def run_audit(stream: BinaryIO, raw_filename: str, online_search: bool, ai_analy
         result = {'extraction': extracted, 'sources': sources, 'legal': legal, 'ai': ai, 'image_review': image_review,
                   'assessment': assessment(extracted, sources, legal, intended_use),
                   'options': {'online_search': online_search, 'ai_analysis': ai_analysis, 'intended_use': intended_use}}
-        if reverse_search:
+        if reverse_enabled:
             result['options']['reverse_search'] = True
         raw_result = json.dumps(result, ensure_ascii=False, allow_nan=False)
         with connect() as conn:

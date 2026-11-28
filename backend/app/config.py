@@ -17,7 +17,9 @@ class Settings(BaseSettings):
     mai_api_key: SecretStr = SecretStr("")
     mai_model: str = "deepseek-v4.1-flash"
     mai_tls_verify: bool = True
-    google_vision_api_key: SecretStr = SecretStr("")
+    bright_data_proxy_user: str = ""
+    bright_data_proxy_password: SecretStr = SecretStr("")
+    bright_data_ca_file: str = ""
     pixabay_api_key: SecretStr = SecretStr("")
     deepseek_api_key: SecretStr = SecretStr("")
     deepseek_model: str = "deepseek-flash"

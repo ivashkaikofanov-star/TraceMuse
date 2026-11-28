@@ -29,16 +29,15 @@ export function AuditConsent({ value, onChange, disabled = false }: {
     <label className="consent-choice">
       <input type="checkbox" checked={value.online_search} onChange={event => onChange({ ...value,
         online_search: event.target.checked, ai_analysis: event.target.checked && Boolean(provider?.configured),
-        reverse_search: event.target.checked && value.reverse_search,
+        reverse_search: event.target.checked,
       })} />
       <Globe2 size={18} />
-      <span><strong>Поиск источников онлайн</strong><small>TraceMuse проверит ссылки из файлов на поддерживаемых сайтах. Commons получит хеши и краткие поисковые запросы. {settings?.pixabay_configured && 'Pixabay получит поисковые запросы для подбора замен. '}{provider?.configured ? `Модель ${provider.label} получит текстовый контекст и поможет выбрать замены. ` : ''}{provider?.configured && provider.verify_tls === false && 'Проверка сертификата МАИ отключена.'}</small></span>
+      <span><strong>Поиск источников онлайн</strong><small>Включает поиск по картинкам и проверку ссылок. Commons получит хеши и краткие поисковые запросы. {settings?.pixabay_configured && 'Pixabay получит поисковые запросы для подбора замен. '}{provider?.configured ? `Модель ${provider.label} получит текстовый контекст и поможет выбрать замены. ` : ''}{provider?.configured && provider.verify_tls === false && 'Проверка сертификата МАИ отключена.'}</small></span>
     </label>
     <label className="consent-choice">
-      <input type="checkbox" checked={Boolean(value.reverse_search)} disabled={!value.online_search || !settings?.reverse_search_configured} onChange={event => onChange({ ...value, reverse_search: event.target.checked })} />
+      <input type="checkbox" checked={value.reverse_search ?? value.online_search} disabled={!value.online_search} onChange={event => onChange({ ...value, reverse_search: event.target.checked })} />
       <ScanLine size={18} />
-      <span><strong>Обратный поиск изображений</strong><small>Ищет страницы по самим картинкам, даже если в файле нет ссылок. Отправляет до шести уменьшенных копий в Google Cloud Vision.</small>
-        {settings?.reverse_search_configured === false && <small>Для включения укажите GOOGLE_VISION_API_KEY в backend/.env и перезапустите сервер.</small>}
+      <span><strong>Обратный поиск изображений</strong><small>Отправляет уменьшенные копии изображений в Яндекс. Если он не вернёт результаты, TraceMuse попробует Google Lens{settings?.bright_data_configured ? ' и затем Bright Data' : ''}.</small>
       </span>
     </label>
   </fieldset>
@@ -111,7 +110,7 @@ export function NewAudit({ maxUploadMb, maxFiles = 10, onOpen }: {
     if (sourceFile) data.append('reference', sourceFile)
     data.append('online_search', String(options.online_search))
     data.append('ai_analysis', String(options.ai_analysis))
-    if (options.reverse_search) data.append('reverse_search', 'true')
+    if (options.reverse_search !== undefined) data.append('reverse_search', String(options.reverse_search))
     if (options.intended_use) data.append('intended_use', options.intended_use)
     setBusy(true)
     setIssues([])

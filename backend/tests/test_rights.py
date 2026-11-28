@@ -71,8 +71,8 @@ def test_model_selects_only_from_commercially_eligible_replacements(monkeypatch)
 
 
 def test_reverse_search_hit_never_supplies_a_license(monkeypatch):
-    monkeypatch.setattr(rights, '_vision_matches', lambda _: ('complete', {
-        SHA256: {'links': [{'title': 'Published copy', 'url': 'https://example.org/page', 'match': 'Vision match'}]},
+    monkeypatch.setattr(rights, '_reverse_matches', lambda _: ('complete', {
+        SHA256: {'links': [{'title': 'Published copy', 'url': 'https://example.org/page', 'match': 'Yandex match'}]},
     }))
     monkeypatch.setattr(rights, '_query', lambda *_: {})
     item, = rights.review_images(extraction(), 'commercial', True, False, {SHA256: b'preview'})['items']
@@ -86,35 +86,24 @@ def test_local_review_does_not_make_external_requests(monkeypatch):
         raise AssertionError('request while offline')
 
     monkeypatch.setattr(rights, 'plan_image_searches', fail)
-    monkeypatch.setattr(rights, '_vision_matches', fail)
+    monkeypatch.setattr(rights, '_reverse_matches', fail)
     monkeypatch.setattr(rights, '_query', fail)
     assert rights.review_images(extraction(), 'unspecified', False, True)['status'] == 'local_only'
 
 
-def test_vision_posts_opted_in_preview_and_separates_full_and_partial_matches(monkeypatch):
-    monkeypatch.setattr(settings, 'google_vision_api_key', SecretStr('sample-key'))
+def test_reverse_search_processes_all_extracted_images(monkeypatch):
+    assets = extraction()
+    assets['images'] = [assets['images'][0] | {'sha256': f'{i:064x}'} for i in range(13)]
+    previews = {image['sha256']: b'sample' for image in assets['images']}
 
-    def provider(request):
-        assert str(request.url) == rights.VISION_URL
-        assert request.headers['x-goog-api-key'] == 'sample-key'
-        assert b'WEB_DETECTION' in request.content
-        return httpx.Response(200, json={'responses': [{'webDetection': {
-            'pagesWithMatchingImages': [
-                {'url': 'https://example.org/photo', 'fullMatchingImages': [{'url': 'https://example.org/photo.jpg'}]},
-                {'url': 'https://example.org/partial', 'partialMatchingImages': [{'url': 'https://example.org/photo.jpg'}]},
-            ],
-            'fullMatchingImages': [{'url': 'https://example.org/photo.jpg'}],
-        }}]})
+    def reverse(copies):
+        assert copies == previews
+        return 'complete', {sha: {'search': 'no_results'} for sha in copies}
 
-    client = httpx.Client(transport=httpx.MockTransport(provider))
-    monkeypatch.setattr(rights.httpx, 'Client', lambda **_kwargs: client)
-    status, matches = rights._vision_matches({'hash': b'preview'})
-    assert status == 'complete'
-    full_page, full_file, partial_page = matches['hash']['links']
-    assert full_page['url'] == 'https://example.org/photo'
-    assert full_file['url'] == 'https://example.org/photo.jpg'
-    assert partial_page['url'] == 'https://example.org/partial'
-    assert 'частичным' in partial_page['match']
+    monkeypatch.setattr(rights, '_reverse_matches', reverse)
+    monkeypatch.setattr(rights, '_query', lambda *_: {})
+    review = rights.review_images(assets, 'commercial', True, False, previews)
+    assert review['checked'] == review['reverse_checked'] == 13
 
 
 def test_model_cannot_supply_links_or_invent_a_candidate(monkeypatch):

@@ -22,6 +22,7 @@ from .deepseek import is_configured, provider_label, provider_model, save_key, t
 from .evidence import LEGAL_REGISTRIES
 from .extraction import ExtractionError, presentation_links
 from .report import render_pdf
+from .reverse_search import bright_data_configured
 
 logger = logging.getLogger(__name__)
 LOCAL_HOSTS = ['localhost', '127.0.0.1', '[::1]']
@@ -52,7 +53,7 @@ app.add_middleware(TrustedHostMiddleware, allowed_hosts=LOCAL_HOSTS)
 class AuditOptions(BaseModel):
     online_search: StrictBool = False
     ai_analysis: StrictBool = False
-    reverse_search: StrictBool = False
+    reverse_search: StrictBool | None = None
     intended_use: IntendedUse = 'unspecified'
 
 
@@ -121,7 +122,7 @@ def _run_batch(files: list[UploadFile], options: AuditOptions, reference_file: U
             'reference': {'type': 'string', 'format': 'binary', 'description': 'Презентация PPTX со ссылками на источники'},
             'online_search': {'type': 'boolean', 'default': False},
             'ai_analysis': {'type': 'boolean', 'default': False},
-            'reverse_search': {'type': 'boolean', 'default': False},
+            'reverse_search': {'type': 'boolean', 'description': 'По умолчанию включён вместе с онлайн-поиском'},
             'intended_use': {'type': 'string', 'enum': list(get_args(IntendedUse)), 'default': 'unspecified'},
         },
     }}}},
@@ -168,7 +169,8 @@ async def create_audits(request: Request):
             uploads = [*files, *references]
             if sum(file.size or 0 for file in uploads) > limit:
                 raise HTTPException(413, BODY_LIMIT_MESSAGE)
-            flags = {name: form.get(name, 'false') for name in ('online_search', 'ai_analysis', 'reverse_search')}
+            flags = {name: form.get(name, 'false') for name in ('online_search', 'ai_analysis')}
+            flags['reverse_search'] = form.get('reverse_search', flags['online_search'])
             if any(value not in ('true', 'false') for value in flags.values()):
                 raise HTTPException(400, 'Параметры согласия должны иметь значение true или false.')
             if flags['reverse_search'] == 'true' and flags['online_search'] != 'true':
@@ -238,7 +240,8 @@ def get_settings():
     return {'deepseek_configured': is_configured(), 'deepseek_model': settings.deepseek_model,
             'ai': {'provider': provider, 'label': provider_label(provider), 'model': provider_model(provider),
                    'configured': is_configured(provider), 'verify_tls': verify_tls(provider)},
-            'reverse_search_configured': bool(settings.google_vision_api_key.get_secret_value().strip()),
+            'reverse_search_configured': True,
+            'bright_data_configured': bright_data_configured(),
             'pixabay_configured': bool(settings.pixabay_api_key.get_secret_value().strip()),
             'legal_registries': LEGAL_REGISTRIES}
 

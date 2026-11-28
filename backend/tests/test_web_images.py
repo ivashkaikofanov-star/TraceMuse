@@ -1,17 +1,14 @@
-import base64
 import json
 from io import BytesIO
 from time import monotonic
 
-import httpx
 import pytest
 from PIL import Image, ImageDraw
-from pydantic import SecretStr
 
 from app import public_web, rights, web_images
-from app.config import settings
 from app.extraction import extract
 from app.public_web import FetchError, PublicResponse
+from app.reverse_search import SearchResult
 
 
 def raster(tmp_path):
@@ -74,7 +71,7 @@ def test_public_web_page_needs_an_image_specific_licence(tmp_path, monkeypatch, 
         assert item['source'] is None
 
 
-def test_blind_search_distinguishes_vision_candidates_and_confirmed_resize(tmp_path, monkeypatch):
+def test_blind_search_distinguishes_search_candidates_and_confirmed_resize(tmp_path, monkeypatch):
     picture, path = raster(tmp_path)
     previews = {}
     ex = extract(path, path.name, previews=previews)
@@ -89,23 +86,20 @@ def test_blind_search_distinguishes_vision_candidates_and_confirmed_resize(tmp_p
         unavailable: FetchError('сайт ответил HTTP 403'),
     })
 
-    def vision(request):
-        assert request.headers['x-goog-api-key'] == 'test-key'
-        images = json.loads(request.content)['requests']
-        assert base64.b64decode(images[0]['image']['content']) == next(iter(previews.values()))
-        return httpx.Response(200, json={'responses': [{'webDetection': {'pagesWithMatchingImages': [
-            {'url': found, 'fullMatchingImages': [{'url': photo}]},
-            {'url': unavailable, 'partialMatchingImages': [{'url': photo}]},
-        ]}}]})
+    def reverse(copies):
+        assert copies == previews
+        result = SearchResult('found', [
+            {'title': 'Mountain evening', 'url': found, 'thumbnail': photo},
+            {'title': 'Archive', 'url': unavailable, 'thumbnail': photo},
+        ], [{'provider': 'yandex', 'status': 'found'}], 'yandex')
+        return {sha: result for sha in copies}
 
-    monkeypatch.setattr(settings, 'google_vision_api_key', SecretStr('test-key'))
-    client_class = httpx.Client
-    monkeypatch.setattr(rights.httpx, 'Client', lambda **options: client_class(transport=httpx.MockTransport(vision), **options))
+    monkeypatch.setattr(rights, 'search_previews', reverse)
     review = rights.review_images(ex, 'commercial', True, False, previews, report_previews=previews)
     assert review['reverse_checked'] == 1
     item, = review['items']
     confirmed, failed = item['web_matches']
-    assert item['reverse_search'] == 'found'
+    assert item['reverse_search'] == 'found' and item['reverse_provider'] == 'Яндекс'
     assert confirmed['url'] == found and confirmed['match_kind'] == 'transformed'
     assert failed['verification'] == 'unavailable' and '403' in failed['reason']
     assert item['rights']['action'] == 'unverified'
@@ -118,7 +112,7 @@ def test_empty_visual_index_still_uses_metadata_for_text_search(tmp_path, monkey
     picture.save(path, exif=description)
     previews = {}
     ex = extract(path, path.name, previews=previews)
-    monkeypatch.setattr(rights, '_vision_matches', lambda images: (
+    monkeypatch.setattr(rights, '_reverse_matches', lambda images: (
         'complete', {sha: {'search': 'no_results', 'links': []} for sha in images},
     ))
     terms = []

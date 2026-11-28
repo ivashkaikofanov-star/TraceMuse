@@ -5,7 +5,6 @@ from concurrent.futures import ThreadPoolExecutor
 from datetime import UTC, datetime
 from io import BytesIO
 import math
-import json
 import re
 from time import monotonic
 
@@ -13,16 +12,13 @@ import httpx
 from PIL import Image
 
 from . import pixabay
-from .config import settings
 from .deepseek import plan_image_searches, rank_image_replacements
 from .evidence import HTTP_HEADERS, THUMBNAIL_HOSTS, _catalog_meta, _commons_title, _file_url, _http_url, _license, _pages, _plain, _query, _read
 from .extraction import image_phash, jpeg_preview, pixel_hash
 from .photo_license import CONFIRMED_MATCHES, commercial_conditions, photo_credit
-from .public_web import public_url
+from .reverse_search import NAMES, search_previews
 from .web_images import compare_links
 
-MAX_ASSETS = 12
-VISION_URL = 'https://vision.googleapis.com/v1/images:annotate'
 NETWORK_ERRORS = (httpx.HTTPError, OSError, ValueError, TypeError, AttributeError, Image.DecompressionBombError)
 STOP_WORDS = set('image photo picture logo photograph illustration background slide png jpg jpeg svg webp img file picture vector and with from this version crop copy of the in a by on is for corbis stock фотография слайд фото изображение логотип презентация картинка рисунок скачать версия'.split())
 FORMAT_TYPES = {'image/jpeg', 'image/png', 'image/webp'}
@@ -65,92 +61,20 @@ def _assets(extraction: dict) -> list[dict]:
     return list(assets.values())
 
 
-def _vision_matches(previews: dict[str, bytes]) -> tuple[str, dict]:
+def _reverse_matches(previews: dict[str, bytes]) -> tuple[str, dict]:
     if not previews:
         return 'not_available', {}
-    key = settings.google_vision_api_key.get_secret_value().strip()
-    if not key:
-        return 'not_configured', {}
-    body = {'requests': [
-        {'image': {'content': base64.b64encode(data).decode('ascii')},
-         'features': [{'type': 'WEB_DETECTION', 'maxResults': 12}]}
-        for data in previews.values()
-    ]}
-    try:
-        with httpx.Client(follow_redirects=False, timeout=httpx.Timeout(12, connect=4)) as client:
-            with client.stream('POST', VISION_URL, headers={'X-Goog-Api-Key': key}, json=body) as response:
-                response.raise_for_status()
-                data = bytearray()
-                deadline = monotonic() + 12
-                for chunk in response.iter_bytes(32768):
-                    if len(data) + len(chunk) > 2_000_000 or monotonic() > deadline:
-                        return 'unavailable', {}
-                    data.extend(chunk)
-            responses = json.loads(data)['responses']
-        if not isinstance(responses, list) or len(responses) != len(previews):
-            return 'unavailable', {}
-    except NETWORK_ERRORS + (KeyError,):
-        return 'unavailable', {}
-
     results = {}
-    errors = 0
-    for sha, response in zip(previews, responses):
-        if not isinstance(response, dict) or response.get('error'):
-            errors += 1
-            results[sha] = {'search': 'unavailable'}
-            continue
-        item = response.get('webDetection') or {}
-        if not isinstance(item, dict):
-            errors += 1
-            results[sha] = {'search': 'unavailable'}
-            continue
-        links = {}
-        commons = set()
-        stock_ids = set()
-        pages = item.get('pagesWithMatchingImages')
-        for page in pages[:12] if isinstance(pages, list) else []:
-            if not isinstance(page, dict) or not (url := public_url(page.get('url'))):
-                continue
-            full = page.get('fullMatchingImages')
-            partial = page.get('partialMatchingImages')
-            images = [media for entries in (full, partial) if isinstance(entries, list) for image in entries[:3]
-                      if isinstance(image, dict) and (media := public_url(image.get('url')))]
-            if full or url not in links:
-                links[url] = (0 if full else 2 if partial else 3, {
-                    'title': _plain(page.get('pageTitle')) or _http_url(url).hostname, 'url': url,
-                    'match': ('Google Vision нашёл страницу с полным совпадением' if full
-                              else 'Google Vision нашёл страницу с частичным совпадением' if partial
-                              else 'Google Vision предложил страницу'),
-                    'images': images,
-                })
-            if full:
-                if title := _commons_title(url):
-                    commons.add(title)
-                if stock_id := pixabay.photo_id(url):
-                    stock_ids.add(stock_id)
-        for key, priority, message in (
-            ('fullMatchingImages', 1, 'Google Vision нашёл совпадающий файл'),
-            ('partialMatchingImages', 3, 'Google Vision нашёл частичное совпадение файла'),
-        ):
-            entries = item.get(key)
-            for entry in entries[:6] if isinstance(entries, list) else []:
-                if isinstance(entry, dict) and (url := public_url(entry.get('url'))):
-                    links.setdefault(url, (priority, {'title': _http_url(url).hostname, 'url': url, 'match': message}))
-        labels = item.get('bestGuessLabels')
-        labels = labels if isinstance(labels, list) else []
-        label = next((value for entry in labels[:3] if isinstance(entry, dict)
-                      and (value := _meaningful(_plain(entry.get('label'))))), '')
-        if not label:
-            label = next((value for priority, link in links.values() if priority == 0
-                          and (value := _meaningful(link['title'])) and ' ' in value), '')
-        if not label and isinstance(entities := item.get('webEntities'), list):
-            label = next((value for entry in entities[:5] if isinstance(entry, dict)
-                          and (value := _meaningful(_plain(entry.get('description'))))), '')
-        results[sha] = {'links': [link for _, link in sorted(links.values(), key=lambda hit: hit[0])[:6]],
-                        'search': 'found' if links else 'no_results',
-                        'label': label, 'commons': sorted(commons)[:4],
-                        'stock_ids': sorted(stock_ids)[:1]}
-    return ('unavailable' if errors == len(previews) else 'partial' if errors else 'complete'), results
+    for sha, result in search_previews(previews).items():
+        links = [{**match, 'match': f"{NAMES[result.provider]} предложил страницу",
+                  'images': [match['thumbnail']] if match['thumbnail'] else []} for match in result.matches]
+        results[sha] = {'search': result.status, 'links': links, 'provider': result.provider,
+                        'attempts': result.attempts,
+                        'label': next((label for hit in links if (label := _meaningful(hit['title'])) and ' ' in label), ''),
+                        'commons': list(dict.fromkeys(title for hit in links if (title := _commons_title(hit['url']))))[:4],
+                        'stock_ids': list(dict.fromkeys(photo_id for hit in links if (photo_id := pixabay.photo_id(hit['url']))))[:1]}
+    failures = sum(item['search'] == 'unavailable' for item in results.values())
+    return ('unavailable' if failures == len(results) else 'partial' if failures else 'complete'), results
 
 
 def _material(title: str, info: dict) -> dict:
@@ -275,7 +199,7 @@ def _stock_replacements(client, deadline, asset, term, excluded):
     return candidates
 
 
-def _check_asset(client, deadline, asset, query, vision, intended_use):
+def _check_asset(client, deadline, asset, query, reverse, intended_use):
     excluded, matches, alternatives = set(), [], []
     sha1 = asset.get('sha1')
     failed = False
@@ -294,9 +218,9 @@ def _check_asset(client, deadline, asset, query, vision, intended_use):
                     excluded.add(record['url'])
         except NETWORK_ERRORS:
             failed = True
-    if vision.get('commons') and not matches:
+    if reverse.get('commons') and not matches:
         try:
-            pages = _pages(_query(client, deadline, {'titles': '|'.join(vision['commons']), 'prop': 'imageinfo',
+            pages = _pages(_query(client, deadline, {'titles': '|'.join(reverse['commons']), 'prop': 'imageinfo',
                                                       'iiprop': 'sha1|extmetadata|url|mime|size'}))
             for page in pages:
                 info = _page_image(page)
@@ -314,18 +238,18 @@ def _check_asset(client, deadline, asset, query, vision, intended_use):
             failed = True
 
     branding = bool(asset.get('logo_references'))
-    if not matches and not branding and vision.get('stock_ids'):
+    if not matches and not branding and reverse.get('stock_ids'):
         try:
-            if match := _stock_match(client, deadline, asset, vision['stock_ids'][0]):
+            if match := _stock_match(client, deadline, asset, reverse['stock_ids'][0]):
                 matches.append(match)
                 excluded.add(match['url'])
         except NETWORK_ERRORS:
             failed = True
-    for material in vision.get('materials', []):
+    for material in reverse.get('materials', []):
         if material['url'] not in excluded:
             matches.append(material)
             excluded.add(material['url'])
-    label = vision.get('label', '') or asset['description'] or asset['metadata_hint']
+    label = reverse.get('label', '') or asset['description'] or asset['metadata_hint']
     source_term = _meaningful(query.get('source', '') or label)
     replacement_term = _meaningful(query.get('replacement', '') or label)
     if matches:
@@ -455,6 +379,11 @@ def _add_photos(asset, outcome, report_previews, reverse_evidence=None):
                    web_matches=(reverse_evidence or {}).get('links', []))
     if reverse_evidence:
         outcome['reverse_search'] = reverse_evidence['search']
+        if reverse_evidence.get('provider'):
+            outcome['reverse_provider'] = NAMES[reverse_evidence['provider']]
+        if reverse_evidence.get('attempts'):
+            outcome['reverse_attempts'] = [attempt | {'provider': NAMES[attempt['provider']]}
+                                           for attempt in reverse_evidence['attempts']]
     rights = outcome.get('rights')
     if rights and rights['category'] == 'unknown' and any(
         match.get('verification') == 'verified' for match in outcome['web_matches']
@@ -465,21 +394,20 @@ def _add_photos(asset, outcome, report_previews, reverse_evidence=None):
     return outcome
 
 
-def _unchecked(asset, report_previews, *, limit=False):
-    detail = ('Изображение вне лимита онлайн-поиска этой проверки.' if limit
-              else 'Поиск источника выключен. Разрешение на коммерческое использование не установлено.')
+def _unchecked(asset, report_previews):
+    detail = 'Поиск источника выключен. Разрешение на коммерческое использование не установлено.'
     decision = {'category': 'unknown', 'label': 'Условия не проверялись',
                 'action': 'unverified', 'detail': detail, 'warning': '', 'changes': ''}
     return _add_photos(asset, {'status': 'review', 'rights': decision, 'reason': detail,
                               'failed': False, 'replacements': []}, report_previews,
-                       {'search': 'limit' if limit else 'disabled'})
+                       {'search': 'disabled'})
 
 
 def review_images(extraction: dict, intended_use: str, online: bool, ai_enabled: bool,
                   previews: dict[str, bytes] | None = None, *, report_previews: dict[str, bytes] | None = None,
                   reference: tuple[str, list[str]] | None = None) -> dict:
     assets = _assets(extraction)
-    selected = assets[:MAX_ASSETS]
+    selected = assets
     if not selected:
         return {'status': 'no_images', 'total': 0, 'checked': 0, 'items': []}
     if not online:
@@ -491,8 +419,7 @@ def review_images(extraction: dict, intended_use: str, online: bool, ai_enabled:
                for item in selected]
     selected_previews = {item['sha256']: previews[item['sha256']] for item in selected
                          if previews is not None and item['sha256'] in previews}
-    reverse_input = dict(list(selected_previews.items())[:6])
-    reverse_status, reversed_images = (_vision_matches(reverse_input) if previews is not None
+    reverse_status, reversed_images = (_reverse_matches(selected_previews) if previews is not None
                                        else ('disabled', {}))
     reverse_checked = sum(result.get('search') != 'unavailable' for result in reversed_images.values())
     urls = extraction.get('links', []) + (reference[1] if reference else [])
@@ -514,7 +441,6 @@ def review_images(extraction: dict, intended_use: str, online: bool, ai_enabled:
             sha = item['sha256']
             hints['search'] = ('found' if hints.get('links') else
                                reverse_status if reverse_status in {'disabled', 'not_configured'} else
-                               'limit' if sha in selected_previews and sha not in reverse_input else
                                'not_available' if sha not in selected_previews else 'unavailable')
         checked = [findings[item['sha256']] for findings in (linked_images, checked_reverse)
                    if item['sha256'] in findings]
@@ -537,7 +463,7 @@ def review_images(extraction: dict, intended_use: str, online: bool, ai_enabled:
         image['visual_hint'] = hints.get('label', '')
         hints['commons'] = list(dict.fromkeys(hints.get('commons', []) + linked_commons))[:4]
         hints['stock_ids'] = list(dict.fromkeys(hints.get('stock_ids', []) + linked_stock))[:1]
-    planning = plan_image_searches(limited, 'commercial') if ai_enabled else {'status': 'disabled', 'queries': {}}
+    planning = plan_image_searches(limited[:12], 'commercial') if ai_enabled else {'status': 'disabled', 'queries': {}}
     deadline = monotonic() + 24
     with httpx.Client(headers=HTTP_HEADERS, follow_redirects=False) as client, ThreadPoolExecutor(max_workers=4) as pool:
         futures = [pool.submit(_check_asset, client, deadline, item, planning['queries'].get(item['id'], {}),
@@ -560,8 +486,7 @@ def review_images(extraction: dict, intended_use: str, online: bool, ai_enabled:
             if outcome['status'] == 'review':
                 outcome['status'] = 'replace'
         items.append(_add_photos(asset, outcome, report_previews, reversed_images.get(asset['sha256'])))
-    items.extend(_unchecked(asset, report_previews, limit=True) for asset in assets[MAX_ASSETS:])
-    return {'status': 'partial' if len(assets) > len(selected) or any(item['failed'] for item in items)
+    return {'status': 'partial' if any(item['failed'] for item in items)
                       or any(check['checked'] < check['eligible'] for check in (linked_check, reverse_checks))
                       or reverse_status in {'unavailable', 'partial', 'not_configured', 'not_available'} else 'complete',
             'total': len(assets), 'checked': len(selected), 'model_status': planning['status'],

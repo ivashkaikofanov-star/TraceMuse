@@ -211,10 +211,10 @@ def render_pdf(audit: dict) -> bytes:
         if reverse := review.get("reverse_status"):
             message = {
                 "disabled": "Обратный поиск по изображению не включён. Работал поиск по каталогам и доступным ссылкам.",
-                "not_configured": "Ключ Google Cloud Vision отсутствует.",
-                "unavailable": "Google Cloud Vision не ответил или отклонил запрос.",
-                "not_available": "Не удалось подготовить растровые копии для Google Cloud Vision.",
-            }.get(reverse, f"Google Cloud Vision обработал {review.get('reverse_checked', 0)} из {review['checked']} изображений.")
+                "not_configured": "В этой проверке обратный поиск не был настроен.",
+                "unavailable": "Поисковые сервисы не завершили проверку.",
+                "not_available": "Не удалось подготовить растровые копии для поиска.",
+            }.get(reverse, f"Обратный поиск завершён для {review.get('reverse_checked', 0)} из {review['checked']} изображений.")
             paragraph(message, quiet)
         for item in review["items"]:
             rights = item.get("rights")
@@ -230,13 +230,16 @@ def render_pdf(audit: dict) -> bytes:
             paragraph(f"{item['id']} · {action}", heading)
             paragraph(f"{', '.join(item['locations'])} · {item['name']}", subheading)
             if review['status'] != 'local_only' and (search := item.get('reverse_search')):
-                search_message = {"disabled": "не запускался", "not_configured": "Google Cloud Vision не настроен",
-                                  "unavailable": "Google Cloud Vision не завершил проверку",
+                search_message = {"disabled": "не запускался", "not_configured": "не был настроен",
+                                  "unavailable": "поисковые сервисы не завершили проверку",
                                   "not_available": "нет растровой копии для поиска", "limit": "достигнут лимит изображений",
-                                  "found": "Google Cloud Vision нашёл кандидатов",
-                                  "no_results": "Google Cloud Vision не нашёл совпадений"}.get(search)
+                                  "found": "найдены страницы для сверки", "no_results": "страницы не найдены"}.get(search)
                 if search_message:
-                    paragraph(f"Поиск по картинке · {search_message}.", quiet)
+                    provider = f" · {item['reverse_provider']}" if item.get('reverse_provider') else ''
+                    paragraph(f"Поиск по картинке · {search_message}{provider}.", quiet)
+                for attempt in item.get('reverse_attempts', []):
+                    if attempt.get('message'):
+                        paragraph(f"{attempt['provider']} · {attempt['message']}", quiet)
 
             labels = ["Исходное изображение"]
             for material in choices:

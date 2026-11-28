@@ -13,18 +13,19 @@ const actions = {
 
 const reverseLabels: Record<string, string> = {
   disabled: 'Обратный поиск по изображению не включён. Работал поиск по каталогам и доступным ссылкам.',
-  not_configured: 'Ключ Google Cloud Vision отсутствует.',
-  unavailable: 'Google Cloud Vision не ответил или отклонил запрос.',
-  partial: 'Google Cloud Vision обработал часть изображений.',
-  not_available: 'Не удалось подготовить растровые копии для Google Cloud Vision.',
+  not_configured: 'В этой проверке обратный поиск не был настроен.',
+  unavailable: 'Поисковые сервисы не завершили проверку.',
+  partial: 'Обратный поиск завершился только для части изображений.',
+  not_available: 'Не удалось подготовить растровые копии для поиска.',
 }
 
 const imageSearchLabels: Record<string, string> = {
-  disabled: 'Не запускался', not_configured: 'Google Cloud Vision не настроен',
-  unavailable: 'Google Cloud Vision не завершил проверку', not_available: 'Нет растровой копии для поиска',
-  limit: 'Достигнут лимит изображений', found: 'Google Cloud Vision нашёл кандидатов',
-  no_results: 'Google Cloud Vision не нашёл совпадений',
+  disabled: 'не запускался', not_configured: 'не был настроен', unavailable: 'поисковые сервисы не завершили проверку',
+  not_available: 'нет растровой копии для поиска', limit: 'достигнут лимит изображений',
+  found: 'найдены страницы для сверки', no_results: 'страницы не найдены',
 }
+
+const attemptLabels: Record<string, string> = { found: 'нашёл страницы', no_results: 'нет результатов' }
 
 function Link({ url, children }: { url: string, children: string }) {
   const href = safeHref(url)
@@ -100,7 +101,7 @@ export function ImageReviewSection({ review }: { review: ImageReview }) {
       {failedLinks.map(page => <p key={page.url}><Link url={page.url}>Открыть ссылку</Link> · {page.reason}</p>)}
     </details>}
     {review.reverse_status && reverseLabels[review.reverse_status] && <p className="muted">{reverseLabels[review.reverse_status]}</p>}
-    {Boolean(review.reverse_checked) && <p className="muted">Google Cloud Vision обработал {review.reverse_checked} из {review.checked} изображений.</p>}
+    {Boolean(review.reverse_checked) && <p className="muted">Обратный поиск завершён для {review.reverse_checked} из {review.checked} изображений.</p>}
     {review.items.map(item => {
       const choices = item.replacements ?? (item.replacement ? [item.replacement] : [])
       const rights = item.rights
@@ -112,8 +113,12 @@ export function ImageReviewSection({ review }: { review: ImageReview }) {
         </div>
         <p><strong>{item.locations.join(' · ')}</strong> · {item.name}</p>
         {item.reverse_search && review.status !== 'local_only' && <p className="muted">
-          Поиск по картинке · {imageSearchLabels[item.reverse_search]}
+          Поиск по картинке · {imageSearchLabels[item.reverse_search]}{item.reverse_provider ? ` · ${item.reverse_provider}` : ''}
         </p>}
+        {item.reverse_attempts && (item.reverse_attempts.length > 1 || !item.reverse_provider) && <details>
+          <summary>Результаты поисковых сервисов</summary>
+          {item.reverse_attempts.map(attempt => <p key={attempt.provider}>{attempt.provider} · {attempt.message ?? attemptLabels[attempt.status]}</p>)}
+        </details>}
         <div className="image-options">
           <div className="image-original">
             <h4>Исходное изображение</h4>

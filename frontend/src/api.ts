@@ -86,6 +86,8 @@ export interface ImageReview {
     reason: string
     original_preview?: string
     reverse_search?: string
+    reverse_provider?: string
+    reverse_attempts?: Array<{ provider: string, status: string, message?: string }>
     rights?: {
       label: string
       category: string
@@ -133,6 +135,7 @@ export interface Settings {
   ai: { provider: "deepseek" | "mai", label: string, model: string, configured: boolean, verify_tls: boolean }
   legal_registries: Registry[]
   reverse_search_configured?: boolean
+  bright_data_configured?: boolean
   pixabay_configured?: boolean
 }
 
