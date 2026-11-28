@@ -202,8 +202,12 @@ def render_pdf(audit: dict) -> bytes:
         linked = review.get("linked_check") or {}
         if linked.get("eligible") or linked.get("reference"):
             where = f" из {linked['reference']}" if linked.get("reference") else ""
-            paragraph(f"По ссылкам{where} проверено {linked['checked']} из {linked['eligible']} поддерживаемых страниц и файлов. "
+            paragraph(f"По ссылкам{where} проверено {linked['checked']} из {linked['eligible']} страниц и файлов. "
                       f"Совпадения и возможные совпадения найдены для {linked['matched']} из {review['checked']} изображений.")
+            for page in linked.get('pages', []):
+                if page.get('reason'):
+                    fields({"Ссылка проверена частично" if page['status'] != 'unavailable' else "Ссылка недоступна": page['url'],
+                            "Причина": page['reason']})
         if reverse := review.get("reverse_status"):
             message = {
                 "disabled": "Обратный поиск по изображению не включён. Работал поиск по каталогам и доступным ссылкам.",
@@ -225,6 +229,14 @@ def render_pdf(audit: dict) -> bytes:
                           "unverified": "Разрешение не установлено"}[rights["action"]]
             paragraph(f"{item['id']} · {action}", heading)
             paragraph(f"{', '.join(item['locations'])} · {item['name']}", subheading)
+            if review['status'] != 'local_only' and (search := item.get('reverse_search')):
+                search_message = {"disabled": "не запускался", "not_configured": "Google Cloud Vision не настроен",
+                                  "unavailable": "Google Cloud Vision не завершил проверку",
+                                  "not_available": "нет растровой копии для поиска", "limit": "достигнут лимит изображений",
+                                  "found": "Google Cloud Vision нашёл кандидатов",
+                                  "no_results": "Google Cloud Vision не нашёл совпадений"}.get(search)
+                if search_message:
+                    paragraph(f"Поиск по картинке · {search_message}.", quiet)
 
             labels = ["Исходное изображение"]
             for material in choices:
@@ -252,8 +264,9 @@ def render_pdf(audit: dict) -> bytes:
                 paragraph(item["reason"])
 
             if source := item.get("source"):
-                exact = not rights or source.get("match_kind") in {"bytes", "pixels"}
+                exact = not rights or source.get("match_kind") in {"bytes", "pixels", "transformed"}
                 fields({"Страница исходника" if exact else "Похожая публикация": source["url"],
+                        "Автор": source.get("author") if exact else None,
                         "license_url": source["license"].get("url") if exact else None})
             if (credit := item.get("credit")) and (not rights or rights["action"] != "keep"):
                 fields({"Готовая подпись к исходнику": credit})
@@ -266,7 +279,12 @@ def render_pdf(audit: dict) -> bytes:
             if rights and rights["action"] != "keep" and not any(m.get("kind") == "no_credit" for m in choices) and review["status"] != "local_only":
                 paragraph("Подходящая замена без подписи не найдена.", quiet)
             for match in item.get("web_matches", []) or []:
-                fields({"Совпадение в интернете": match["title"], "url": match["url"], "Результат сверки": match.get("match")})
+                fields({"Совпадение в интернете": match["title"], "url": match["url"], "Результат сверки": match.get("match"),
+                        "Автор": match.get("author"), "Издатель": match.get("publisher"),
+                        "Автор публикации": match.get("page_author") if not match.get("author") else None})
+                paragraph(match.get("reason", ""), quiet)
+                if match.get("verification") == "not_checked":
+                    paragraph("Сайт не проверялся в пределах этой проверки.", quiet)
                 paragraph(match.get("terms", ""))
                 fields({"Условия площадки": match.get("terms_url")})
 

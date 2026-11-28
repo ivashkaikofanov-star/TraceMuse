@@ -1,6 +1,7 @@
 """Commercial-use decisions for an image, based on the published licence evidence."""
 
 SHARE_ALIKE = 'Производные работы распространяются на совместимых условиях ShareAlike'
+CONFIRMED_MATCHES = frozenset({'bytes', 'pixels', 'transformed'})
 
 
 def photo_credit(material: dict, modified: bool = False) -> str:
@@ -16,7 +17,7 @@ def _decision(category, label, action, detail, *, warning='', changes=''):
 
 
 def commercial_conditions(matches: list[dict], *, branded: bool, modified: bool) -> dict:
-    exact = [item for item in matches if item['match_kind'] in {'bytes', 'pixels'}]
+    exact = [item for item in matches if item['match_kind'] in CONFIRMED_MATCHES]
     label = 'Условия не найдены или есть только перепечатка'
     if not exact:
         if branded:
@@ -36,12 +37,18 @@ def commercial_conditions(matches: list[dict], *, branded: bool, modified: bool)
         return _decision('unknown', 'Противоречивые сведения об изображении', 'unverified',
                          'В найденных точных копиях указаны разные авторы или условия. Разрешение не установлено.')
     if licence.get('commercial_allowed') is False:
+        if kind == 'backiee_personal':
+            return _decision(kind, licence['name'], 'restricted',
+                             'Площадка разрешает личное некоммерческое использование. Для коммерческой публикации получите разрешение правообладателя или замените изображение.')
         return _decision(kind, licence['name'], 'restricted',
                          'Лицензия не разрешает коммерческое использование. Подпись не поможет: нужно отдельное разрешение или замена.')
     if branded:
         return _decision(kind, licence['name'], 'unverified',
                          'Условия на изображение найдены. Использование распознанного товарного знака требует отдельного основания; подписи для этого недостаточно.')
     if any(item != SHARE_ALIKE for item in licence.get('restrictions', [])):
+        if kind == 'stock_download':
+            return _decision(kind, licence['name'], 'conditional',
+                             'Откройте карточку материала, скачайте его с подходящей лицензией и сохраните подтверждение. Без такой лицензии используйте замену.')
         return _decision(kind, licence['name'], 'conditional',
                          'Источник указывает дополнительные ограничения. Готовая подпись сама по себе их не покрывает.',
                          warning=' '.join(item for item in licence['restrictions'] if item != SHARE_ALIKE))

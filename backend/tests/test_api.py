@@ -14,6 +14,7 @@ from app.config import settings
 from app import deepseek, rights, web_images
 from app.main import app
 from app.audits import assessment, upload_directory
+from app.public_web import PublicResponse
 
 
 HTML = '<!doctype html><title>Курсовая</title><p>Проверка перед публикацией</p>' \
@@ -108,11 +109,11 @@ def test_source_presentation_verifies_link_without_granting_permission(isolated_
         archive.writestr('ppt/presentation.xml', '<presentation/>')
         archive.writestr('ppt/slides/slide1.xml', f'<sld><p><t>{nested}</t></p><p><t>{unsafe}</t></p></sld>')
 
-    def fetch(_client, url, _params, _deadline, _limit):
+    def fetch(url, _deadline, _limit):
         assert url == media
-        return primary.getvalue()
+        return PublicResponse(url, 'image/jpeg', primary.getvalue())
 
-    monkeypatch.setattr(web_images, '_read', fetch)
+    monkeypatch.setattr(web_images, 'fetch', fetch)
     monkeypatch.setattr(rights, '_query', lambda *_: {})
     monkeypatch.setattr('app.audits.search_sources', lambda *_: {'status': 'complete', 'items': []})
     files = [('files', ('photo.jpg', primary.getvalue())), ('reference', ('sources.pptx', reference.getvalue()))]
@@ -123,7 +124,8 @@ def test_source_presentation_verifies_link_without_granting_permission(isolated_
         audit_id = response.json()['items'][0]['id']
         audit_url = f'/api/audits/{audit_id}'
         review = session.get(audit_url).json()['result']['image_review']
-        assert review['linked_check'] == {'reference': 'sources.pptx', 'checked': 1, 'eligible': 1, 'matched': 1}
+        assert review['linked_check'] == {'reference': 'sources.pptx', 'checked': 1, 'eligible': 1, 'matched': 1,
+                                          'pages': [{'url': media, 'status': 'matched', 'reason': ''}]}
         assert review['reverse_status'] == 'disabled'
         item, = review['items']
         assert item['web_matches'][0]['url'] == media

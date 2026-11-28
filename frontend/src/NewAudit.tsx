@@ -34,11 +34,13 @@ export function AuditConsent({ value, onChange, disabled = false }: {
       <Globe2 size={18} />
       <span><strong>Поиск источников онлайн</strong><small>TraceMuse проверит ссылки из файлов на поддерживаемых сайтах. Commons получит хеши и краткие поисковые запросы. {settings?.pixabay_configured && 'Pixabay получит поисковые запросы для подбора замен. '}{provider?.configured ? `Модель ${provider.label} получит текстовый контекст и поможет выбрать замены. ` : ''}{provider?.configured && provider.verify_tls === false && 'Проверка сертификата МАИ отключена.'}</small></span>
     </label>
-    {settings?.reverse_search_configured && <label className="consent-choice">
-      <input type="checkbox" checked={Boolean(value.reverse_search)} disabled={!value.online_search} onChange={event => onChange({ ...value, reverse_search: event.target.checked })} />
+    <label className="consent-choice">
+      <input type="checkbox" checked={Boolean(value.reverse_search)} disabled={!value.online_search || !settings?.reverse_search_configured} onChange={event => onChange({ ...value, reverse_search: event.target.checked })} />
       <ScanLine size={18} />
-      <span><strong>Обратный поиск изображений</strong><small>До шести уменьшенных копий изображений отправятся в Google Cloud Vision. Сервис ищет страницы, на которых они встречаются.</small></span>
-    </label>}
+      <span><strong>Обратный поиск изображений</strong><small>Ищет страницы по самим картинкам, даже если в файле нет ссылок. Отправляет до шести уменьшенных копий в Google Cloud Vision.</small>
+        {settings?.reverse_search_configured === false && <small>Для включения укажите GOOGLE_VISION_API_KEY в backend/.env и перезапустите сервер.</small>}
+      </span>
+    </label>
   </fieldset>
 }
 

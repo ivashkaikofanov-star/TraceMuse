@@ -228,19 +228,24 @@ def _image_record(stream: BinaryIO, name: str, expected: str | None = None,
             record['logo_references'] = matches
         if previews is not None and len(previews) < MAX_IMAGES and record['sha256'] not in previews:
             previews[record['sha256']] = jpeg_preview(image, 640 if len(previews) < 6 else 360)
+        metadata = {
+            label: _short(image.info[field])
+            for field, label in [('Title', 'title'), ('Description', 'description')]
+            if image.info.get(field)
+        }
+        exif_fields = {270: 'description'}
         if expected:
-            record['metadata'] = {
-                label: _short(image.info[field])
-                for field, label in [('Title', 'title'), ('Author', 'author'), ('Copyright', 'copyright'), ('Description', 'description')]
-                if image.info.get(field)
-            }
-            try:
-                exif = image.getexif()
-                for tag, key in {270: 'description', 271: 'camera_make', 272: 'camera_model', 306: 'image_datetime', 315: 'artist', 33432: 'copyright'}.items():
-                    if exif.get(tag):
-                        record['metadata'][key] = _short(exif[tag])
-            except (OSError, ValueError, SyntaxError, TypeError):
+            metadata.update({label: _short(image.info[field]) for field, label in [('Author', 'author'), ('Copyright', 'copyright')]
+                             if image.info.get(field)})
+            exif_fields.update({271: 'camera_make', 272: 'camera_model', 306: 'image_datetime', 315: 'artist', 33432: 'copyright'})
+        try:
+            exif = image.getexif()
+            metadata.update({key: _short(exif[tag]) for tag, key in exif_fields.items() if exif.get(tag)})
+        except (OSError, ValueError, SyntaxError, TypeError):
+            if expected:
                 record['metadata_warning'] = 'Часть EXIF не удалось прочитать.'
+        if expected or metadata:
+            record['metadata'] = metadata
     return record
 
 

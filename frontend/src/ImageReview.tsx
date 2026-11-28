@@ -19,6 +19,13 @@ const reverseLabels: Record<string, string> = {
   not_available: 'Не удалось подготовить растровые копии для Google Cloud Vision.',
 }
 
+const imageSearchLabels: Record<string, string> = {
+  disabled: 'Не запускался', not_configured: 'Google Cloud Vision не настроен',
+  unavailable: 'Google Cloud Vision не завершил проверку', not_available: 'Нет растровой копии для поиска',
+  limit: 'Достигнут лимит изображений', found: 'Google Cloud Vision нашёл кандидатов',
+  no_results: 'Google Cloud Vision не нашёл совпадений',
+}
+
 function Link({ url, children }: { url: string, children: string }) {
   const href = safeHref(url)
   return href ? <a className="text-link" href={href} target="_blank" rel="noreferrer">{children} <ExternalLink size={13} /></a> : null
@@ -75,7 +82,8 @@ function Replacement({ material, comparable }: { material: LicensedImage, compar
 
 export function ImageReviewSection({ review }: { review: ImageReview }) {
   if (review.status === 'no_images') return null
-  const actionable = review.items.filter(item => item.rights?.action === 'keep' || item.credit || item.replacement).length
+  const actionable = review.items.filter(item => (item.rights && item.rights.action !== 'unverified') || item.credit || item.replacement).length
+  const failedLinks = review.linked_check?.pages?.filter(page => page.reason) ?? []
   return <section className="panel result-panel image-review">
     <div className="section-heading">
       <h2>Права на изображения</h2>
@@ -85,20 +93,27 @@ export function ImageReviewSection({ review }: { review: ImageReview }) {
       ? <p>Найдено изображений · {review.total}. Чтобы получить выводы и замены, повторите с включённым онлайн-поиском.</p>
       : <p className="muted">Поиск выполнен для {review.checked} из {review.total} уникальных изображений. Повторы объединены.</p>}
     {review.linked_check && (review.linked_check.eligible > 0 || review.linked_check.reference) && <p className="muted">
-      По ссылкам{review.linked_check.reference ? ` из ${review.linked_check.reference}` : ''} проверено {review.linked_check.checked} из {review.linked_check.eligible} поддерживаемых страниц и файлов. Совпадения и возможные совпадения найдены для {review.linked_check.matched} из {review.checked} изображений.
+      По ссылкам{review.linked_check.reference ? ` из ${review.linked_check.reference}` : ''} проверено {review.linked_check.checked} из {review.linked_check.eligible} страниц и файлов. Совпадения и возможные совпадения найдены для {review.linked_check.matched} из {review.checked} изображений.
     </p>}
+    {failedLinks.length > 0 && <details>
+      <summary>Что не удалось проверить по ссылкам</summary>
+      {failedLinks.map(page => <p key={page.url}><Link url={page.url}>Открыть ссылку</Link> · {page.reason}</p>)}
+    </details>}
     {review.reverse_status && reverseLabels[review.reverse_status] && <p className="muted">{reverseLabels[review.reverse_status]}</p>}
     {Boolean(review.reverse_checked) && <p className="muted">Google Cloud Vision обработал {review.reverse_checked} из {review.checked} изображений.</p>}
     {review.items.map(item => {
       const choices = item.replacements ?? (item.replacement ? [item.replacement] : [])
       const rights = item.rights
-      const exactSource = item.source && (!rights || item.source.match_kind === 'bytes' || item.source.match_kind === 'pixels')
+      const exactSource = item.source && (!rights || ['bytes', 'pixels', 'transformed'].includes(item.source.match_kind ?? ''))
       return <article key={item.id} className="evidence-item image-action">
         <div className="image-action-heading">
           <h3>{rights ? rightsTitles[rights.action] : actions[item.status]}</h3>
           {rights && <span className="code-pill">{rights.label}</span>}
         </div>
         <p><strong>{item.locations.join(' · ')}</strong> · {item.name}</p>
+        {item.reverse_search && review.status !== 'local_only' && <p className="muted">
+          Поиск по картинке · {imageSearchLabels[item.reverse_search]}
+        </p>}
         <div className="image-options">
           <div className="image-original">
             <h4>Исходное изображение</h4>
@@ -120,6 +135,11 @@ export function ImageReviewSection({ review }: { review: ImageReview }) {
           <summary>Совпадения в интернете · {item.web_matches.length}</summary>
           {item.web_matches.map(match => <div key={match.url}>
             <p><Link url={match.url}>{match.title}</Link> · {match.match}</p>
+            {match.author && <p>Автор · {match.author}</p>}
+            {!match.author && match.page_author && <p>Автор публикации · {match.page_author}</p>}
+            {match.publisher && <p>Издатель · {match.publisher}</p>}
+            {match.reason && <p className="muted">{match.reason}</p>}
+            {match.verification === 'not_checked' && <p className="muted">Сайт не проверялся в пределах этой проверки.</p>}
             {match.terms && <p>{match.terms} {match.terms_url && <Link url={match.terms_url}>Условия площадки</Link>}</p>}
           </div>)}
         </details>}

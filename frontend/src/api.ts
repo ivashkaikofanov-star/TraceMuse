@@ -63,7 +63,7 @@ export interface LicensedImage {
   author: string
   license: { name: string, url?: string, usage_note?: string }
   match?: string
-  match_kind?: 'bytes' | 'pixels' | 'similar'
+  match_kind?: 'bytes' | 'pixels' | 'transformed' | 'similar'
   credit?: string
   preview?: string
   kind?: 'no_credit' | 'with_credit'
@@ -76,7 +76,8 @@ export interface ImageReview {
   model_status?: string
   reverse_status?: string
   reverse_checked?: number
-  linked_check?: { checked: number, eligible: number, matched: number, reference?: string }
+  linked_check?: { checked: number, eligible: number, matched: number, reference?: string,
+    pages?: Array<{ url: string, status: string, reason: string }> }
   items: Array<{
     id: string
     name: string
@@ -84,6 +85,7 @@ export interface ImageReview {
     status: 'credit' | 'reuse' | 'replace' | 'review' | 'no_query'
     reason: string
     original_preview?: string
+    reverse_search?: string
     rights?: {
       label: string
       category: string
@@ -96,7 +98,8 @@ export interface ImageReview {
     replacement?: LicensedImage
     replacements?: LicensedImage[]
     credit?: string
-    web_matches: Array<{ title: string, url: string, match: string, terms?: string, terms_url?: string }>
+    web_matches: Array<{ title: string, url: string, match: string, terms?: string, terms_url?: string,
+      author?: string, page_author?: string, publisher?: string, verification?: string, reason?: string }>
   }>
 }
 
