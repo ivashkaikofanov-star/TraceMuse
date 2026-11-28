@@ -91,7 +91,7 @@ def test_local_review_does_not_make_external_requests(monkeypatch):
     assert rights.review_images(extraction(), 'unspecified', False, True)['status'] == 'local_only'
 
 
-def test_vision_posts_opted_in_preview_and_preserves_full_matches(monkeypatch):
+def test_vision_posts_opted_in_preview_and_separates_full_and_partial_matches(monkeypatch):
     monkeypatch.setattr(settings, 'google_vision_api_key', SecretStr('sample-key'))
 
     def provider(request):
@@ -103,13 +103,18 @@ def test_vision_posts_opted_in_preview_and_preserves_full_matches(monkeypatch):
                 {'url': 'https://example.org/photo', 'fullMatchingImages': [{'url': 'https://example.org/photo.jpg'}]},
                 {'url': 'https://example.org/partial', 'partialMatchingImages': [{'url': 'https://example.org/photo.jpg'}]},
             ],
+            'fullMatchingImages': [{'url': 'https://example.org/photo.jpg'}],
         }}]})
 
     client = httpx.Client(transport=httpx.MockTransport(provider))
     monkeypatch.setattr(rights.httpx, 'Client', lambda **_kwargs: client)
     status, matches = rights._vision_matches({'hash': b'preview'})
     assert status == 'complete'
-    assert [link['url'] for link in matches['hash']['links']] == ['https://example.org/photo']
+    full_page, full_file, partial_page = matches['hash']['links']
+    assert full_page['url'] == 'https://example.org/photo'
+    assert full_file['url'] == 'https://example.org/photo.jpg'
+    assert partial_page['url'] == 'https://example.org/partial'
+    assert 'частичным' in partial_page['match']
 
 
 def test_model_cannot_supply_links_or_invent_a_candidate(monkeypatch):

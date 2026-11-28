@@ -812,3 +812,10 @@ def extract(path: Path, filename: str, *, previews: dict[str, bytes] | None = No
         serialized['sha256'] = _digest(stream, 'sha256')
         serialized['size'] = path.stat().st_size
         return serialized
+
+
+def presentation_links(stream: BinaryIO) -> list[str]:
+    """Read the links in an optional source presentation using the normal archive limits."""
+    stream.seek(0)
+    result = _extract(stream, 'sources.pptx', 'PPTX', ReadBudget())
+    return list(result.links)

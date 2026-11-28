@@ -1,14 +1,17 @@
 import hashlib
 import sqlite3
 from io import BytesIO
+from urllib.parse import urlencode
+from zipfile import ZipFile
 
 import pytest
 import httpx
 from fastapi.testclient import TestClient
+from PIL import Image
 from pypdf import PdfReader
 
 from app.config import settings
-from app import deepseek
+from app import deepseek, rights, web_images
 from app.main import app
 from app.audits import assessment, upload_directory
 
@@ -90,6 +93,44 @@ def test_input_errors_and_local_origin_guard(isolated_data):
         denied = session.post('/api/audits', files={'files': ('one.html', HTML)}, headers={'Origin': 'https://example.org'})
         assert denied.status_code == 403
         assert session.get('/api/audits').json() == {'items': []}
+
+
+def test_source_presentation_verifies_link_without_granting_permission(isolated_data, monkeypatch):
+    primary = BytesIO()
+    Image.new('RGB', (200, 150), 'blue').save(primary, format='JPEG')
+    media = 'https://i.pinimg.com/originals/example.jpg'
+    nested = 'https://ya.ru/images/search?' + urlencode({'img_url': media})
+    unsafe = 'https://ya.ru/images/search?' + urlencode({'img_url': 'https://127.0.0.1/example.jpg'})
+    reference = BytesIO()
+    with ZipFile(reference, 'w') as archive:
+        archive.writestr('[Content_Types].xml', '<Types><Override PartName="/ppt/presentation.xml" '
+                         'ContentType="application/vnd.openxmlformats-officedocument.presentationml.presentation.main+xml"/></Types>')
+        archive.writestr('ppt/presentation.xml', '<presentation/>')
+        archive.writestr('ppt/slides/slide1.xml', f'<sld><p><t>{nested}</t></p><p><t>{unsafe}</t></p></sld>')
+
+    def fetch(_client, url, _params, _deadline, _limit):
+        assert url == media
+        return primary.getvalue()
+
+    monkeypatch.setattr(web_images, '_read', fetch)
+    monkeypatch.setattr(rights, '_query', lambda *_: {})
+    monkeypatch.setattr('app.audits.search_sources', lambda *_: {'status': 'complete', 'items': []})
+    files = [('files', ('photo.jpg', primary.getvalue())), ('reference', ('sources.pptx', reference.getvalue()))]
+    with client() as session:
+        assert session.post('/api/audits', files=files).status_code == 400
+        response = session.post('/api/audits', files=files, data={'online_search': 'true'})
+        assert response.status_code == 201, response.text
+        audit_id = response.json()['items'][0]['id']
+        audit_url = f'/api/audits/{audit_id}'
+        review = session.get(audit_url).json()['result']['image_review']
+        assert review['linked_check'] == {'reference': 'sources.pptx', 'checked': 1, 'eligible': 1, 'matched': 1}
+        assert review['reverse_status'] == 'disabled'
+        item, = review['items']
+        assert item['web_matches'][0]['url'] == media
+        assert item['rights']['action'] == 'unverified'
+        assert len(list(upload_directory().glob('*.bin'))) == 1
+        pdf = PdfReader(BytesIO(session.get(audit_url + '/report.pdf').content))
+        assert 'Файл совпал' in ''.join(page.extract_text() for page in pdf.pages)
 
 
 def test_original_database_migration(isolated_data):

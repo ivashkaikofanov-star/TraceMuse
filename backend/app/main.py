@@ -15,12 +15,12 @@ from starlette.datastructures import UploadFile
 from starlette.formparsers import MultiPartException
 from starlette.middleware.trustedhost import TrustedHostMiddleware
 
-from .audits import MAX_FILES, AuditUnavailable, delete_audit, get_audit, list_audits, original, recover_uploads, run_audit
+from .audits import MAX_FILES, AuditUnavailable, delete_audit, display_filename, get_audit, list_audits, original, recover_uploads, run_audit
 from .config import AIProvider, BACKEND_DIR, settings
 from .db import database_path, init_db
 from .deepseek import is_configured, provider_label, provider_model, save_key, test_connection, verify_tls
 from .evidence import LEGAL_REGISTRIES
-from .extraction import ExtractionError
+from .extraction import ExtractionError, presentation_links
 from .report import render_pdf
 
 logger = logging.getLogger(__name__)
@@ -93,13 +93,19 @@ def audits():
     return {'items': list_audits()}
 
 
-def _run_batch(files: list[UploadFile], options: AuditOptions) -> dict:
+def _run_batch(files: list[UploadFile], options: AuditOptions, reference_file: UploadFile | None) -> dict:
+    reference = None
+    if reference_file:
+        try:
+            reference = (display_filename(reference_file.filename or ''), presentation_links(reference_file.file))
+        except ExtractionError as exc:
+            raise HTTPException(422, f'Проверьте презентацию со ссылками. {exc}') from exc
     items, errors = [], []
     for file in files:
         filename = file.filename or ''
         try:
             items.append(run_audit(file.file, filename, options.online_search, options.ai_analysis,
-                                   options.intended_use, options.reverse_search))
+                                   options.intended_use, options.reverse_search, reference=reference))
         except ExtractionError as exc:
             errors.append({'filename': filename, 'message': str(exc)})
         except Exception as exc:
@@ -112,6 +118,7 @@ def _run_batch(files: list[UploadFile], options: AuditOptions) -> dict:
     'requestBody': {'required': True, 'content': {'multipart/form-data': {'schema': {
         'type': 'object', 'required': ['files'], 'properties': {
             'files': {'type': 'array', 'maxItems': MAX_FILES, 'items': {'type': 'string', 'format': 'binary'}},
+            'reference': {'type': 'string', 'format': 'binary', 'description': 'Презентация PPTX со ссылками на источники'},
             'online_search': {'type': 'boolean', 'default': False},
             'ai_analysis': {'type': 'boolean', 'default': False},
             'reverse_search': {'type': 'boolean', 'default': False},
@@ -142,26 +149,37 @@ async def create_audits(request: Request):
 
     bounded_request = Request(request.scope, receive=bounded_receive)
     try:
-        async with bounded_request.form(max_files=MAX_FILES, max_fields=4, max_part_size=1024) as form:
+        async with bounded_request.form(max_files=MAX_FILES + 1, max_fields=4, max_part_size=1024) as form:
             files = form.getlist('files')
             if not files or not all(isinstance(file, UploadFile) for file in files):
                 raise HTTPException(400, 'Выберите хотя бы один файл для проверки.')
-            if any(name not in {'files', *AuditOptions.model_fields} for name in form):
+            if len(files) > MAX_FILES:
+                raise HTTPException(400, f'За один раз можно проверить до {MAX_FILES} файлов.')
+            if any(name not in {'files', 'reference', *AuditOptions.model_fields} for name in form):
                 raise HTTPException(400, 'Запрос содержит неизвестные поля.')
             if any(len(form.getlist(name)) > 1 for name in AuditOptions.model_fields):
                 raise HTTPException(400, 'Параметры проверки можно передать один раз.')
-            if sum(file.size or 0 for file in files) > limit:
+            references = form.getlist('reference')
+            reference = form.get('reference')
+            if len(references) > 1 or (references and (
+                not isinstance(reference, UploadFile) or not (reference.filename or '').lower().endswith('.pptx')
+            )):
+                raise HTTPException(400, 'Прикрепите одну презентацию со ссылками в формате PPTX.')
+            uploads = [*files, *references]
+            if sum(file.size or 0 for file in uploads) > limit:
                 raise HTTPException(413, BODY_LIMIT_MESSAGE)
             flags = {name: form.get(name, 'false') for name in ('online_search', 'ai_analysis', 'reverse_search')}
             if any(value not in ('true', 'false') for value in flags.values()):
                 raise HTTPException(400, 'Параметры согласия должны иметь значение true или false.')
             if flags['reverse_search'] == 'true' and flags['online_search'] != 'true':
                 raise HTTPException(400, 'Обратный поиск требует включённого онлайн-поиска.')
+            if reference and flags['online_search'] != 'true':
+                raise HTTPException(400, 'Для проверки презентации со ссылками включите онлайн-поиск.')
             intended_use = form.get('intended_use', 'unspecified')
             if intended_use not in get_args(IntendedUse):
                 raise HTTPException(400, 'Выберите поддерживаемый вариант использования материала.')
             options = AuditOptions(intended_use=intended_use, **{name: value == 'true' for name, value in flags.items()})
-            result = await run_in_threadpool(_run_batch, files, options)
+            result = await run_in_threadpool(_run_batch, files, options, reference)
     except HTTPException as exc:
         if exc.detail == BODY_LIMIT_MESSAGE:
             raise HTTPException(413, BODY_LIMIT_MESSAGE) from exc

@@ -12,6 +12,7 @@ const actions = {
 }
 
 const reverseLabels: Record<string, string> = {
+  disabled: 'Обратный поиск по изображению не включён. Работал поиск по каталогам и доступным ссылкам.',
   not_configured: 'Ключ Google Cloud Vision отсутствует.',
   unavailable: 'Google Cloud Vision не ответил или отклонил запрос.',
   partial: 'Google Cloud Vision обработал часть изображений.',
@@ -83,7 +84,11 @@ export function ImageReviewSection({ review }: { review: ImageReview }) {
     {review.status === 'local_only'
       ? <p>Найдено изображений · {review.total}. Чтобы получить выводы и замены, повторите с включённым онлайн-поиском.</p>
       : <p className="muted">Поиск выполнен для {review.checked} из {review.total} уникальных изображений. Повторы объединены.</p>}
+    {review.linked_check && (review.linked_check.eligible > 0 || review.linked_check.reference) && <p className="muted">
+      По ссылкам{review.linked_check.reference ? ` из ${review.linked_check.reference}` : ''} проверено {review.linked_check.checked} из {review.linked_check.eligible} поддерживаемых страниц и файлов. Совпадения и возможные совпадения найдены для {review.linked_check.matched} из {review.checked} изображений.
+    </p>}
     {review.reverse_status && reverseLabels[review.reverse_status] && <p className="muted">{reverseLabels[review.reverse_status]}</p>}
+    {Boolean(review.reverse_checked) && <p className="muted">Google Cloud Vision обработал {review.reverse_checked} из {review.checked} изображений.</p>}
     {review.items.map(item => {
       const choices = item.replacements ?? (item.replacement ? [item.replacement] : [])
       const rights = item.rights
@@ -111,9 +116,12 @@ export function ImageReviewSection({ review }: { review: ImageReview }) {
         </div>
         {rights && rights.action !== 'keep' && !choices.some(candidate => candidate.kind === 'no_credit') && review.status !== 'local_only' &&
           <p className="muted">Подходящая замена без подписи не найдена.</p>}
-        {item.web_matches.length > 0 && <details>
+        {item.web_matches.length > 0 && <details open>
           <summary>Совпадения в интернете · {item.web_matches.length}</summary>
-          {item.web_matches.map(match => <p key={match.url}><Link url={match.url}>{match.title}</Link> · {match.match}</p>)}
+          {item.web_matches.map(match => <div key={match.url}>
+            <p><Link url={match.url}>{match.title}</Link> · {match.match}</p>
+            {match.terms && <p>{match.terms} {match.terms_url && <Link url={match.terms_url}>Условия площадки</Link>}</p>}
+          </div>)}
         </details>}
       </article>
     })}

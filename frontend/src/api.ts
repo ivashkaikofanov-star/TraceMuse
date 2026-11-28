@@ -76,6 +76,7 @@ export interface ImageReview {
   model_status?: string
   reverse_status?: string
   reverse_checked?: number
+  linked_check?: { checked: number, eligible: number, matched: number, reference?: string }
   items: Array<{
     id: string
     name: string
@@ -95,7 +96,7 @@ export interface ImageReview {
     replacement?: LicensedImage
     replacements?: LicensedImage[]
     credit?: string
-    web_matches: Array<{ title: string, url: string, match: string }>
+    web_matches: Array<{ title: string, url: string, match: string, terms?: string, terms_url?: string }>
   }>
 }
 

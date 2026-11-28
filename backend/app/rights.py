@@ -18,6 +18,7 @@ from .deepseek import plan_image_searches, rank_image_replacements
 from .evidence import HTTP_HEADERS, THUMBNAIL_HOSTS, _catalog_meta, _commons_title, _file_url, _http_url, _license, _pages, _plain, _query, _read
 from .extraction import image_phash, jpeg_preview, pixel_hash
 from .photo_license import commercial_conditions, photo_credit
+from .web_images import compare_links
 
 MAX_ASSETS = 12
 VISION_URL = 'https://vision.googleapis.com/v1/images:annotate'
@@ -68,7 +69,7 @@ def _vision_matches(previews: dict[str, bytes]) -> tuple[str, dict]:
         return 'not_configured', {}
     body = {'requests': [
         {'image': {'content': base64.b64encode(data).decode('ascii')},
-         'features': [{'type': 'WEB_DETECTION', 'maxResults': 6}]}
+         'features': [{'type': 'WEB_DETECTION', 'maxResults': 12}]}
         for data in previews.values()
     ]}
     try:
@@ -97,29 +98,46 @@ def _vision_matches(previews: dict[str, bytes]) -> tuple[str, dict]:
         if not isinstance(item, dict):
             errors += 1
             continue
-        links = []
+        links = {}
         commons = set()
         stock_ids = set()
         pages = item.get('pagesWithMatchingImages')
-        for page in pages[:8] if isinstance(pages, list) else []:
+        for page in pages[:12] if isinstance(pages, list) else []:
             if not isinstance(page, dict) or not _http_url(page.get('url')):
                 continue
             full = page.get('fullMatchingImages')
-            if not full:
+            if not full and not page.get('partialMatchingImages'):
                 continue
             url = page['url']
-            if url not in [link['url'] for link in links]:
-                links.append({'title': _plain(page.get('pageTitle')) or _http_url(url).hostname,
-                              'url': url, 'match': 'Google Vision указал страницу с полным совпадением изображения'})
-            if title := _commons_title(url):
-                commons.add(title)
-            if stock_id := pixabay.photo_id(url):
-                stock_ids.add(stock_id)
+            if full or url not in links:
+                links[url] = (0 if full else 2, {
+                    'title': _plain(page.get('pageTitle')) or _http_url(url).hostname, 'url': url,
+                    'match': ('Google Vision нашёл страницу с полным совпадением' if full
+                              else 'Google Vision нашёл страницу с частичным совпадением'),
+                })
+            if full:
+                if title := _commons_title(url):
+                    commons.add(title)
+                if stock_id := pixabay.photo_id(url):
+                    stock_ids.add(stock_id)
+        for key, priority, message in (
+            ('fullMatchingImages', 1, 'Google Vision нашёл совпадающий файл'),
+            ('partialMatchingImages', 3, 'Google Vision нашёл частичное совпадение файла'),
+        ):
+            entries = item.get(key)
+            for entry in entries[:6] if isinstance(entries, list) else []:
+                if isinstance(entry, dict) and (parsed := _http_url(entry.get('url'))):
+                    url = entry['url']
+                    links.setdefault(url, (priority, {'title': parsed.hostname, 'url': url, 'match': message}))
         labels = item.get('bestGuessLabels')
         labels = labels if isinstance(labels, list) else []
-        label = next((_meaningful(_plain(entry.get('label'))) for entry in labels[:2]
-                      if isinstance(entry, dict) and isinstance(entry.get('label'), str)), '')
-        results[sha] = {'links': links[:4], 'label': label, 'commons': sorted(commons)[:4],
+        label = next((value for entry in labels[:3] if isinstance(entry, dict)
+                      and (value := _meaningful(_plain(entry.get('label'))))), '')
+        if not label:
+            label = next((value for priority, link in links.values() if priority == 0
+                          and (value := _meaningful(link['title'])) and ' ' in value), '')
+        results[sha] = {'links': [link for _, link in sorted(links.values(), key=lambda hit: hit[0])[:6]],
+                        'label': label, 'commons': sorted(commons)[:4],
                         'stock_ids': sorted(stock_ids)[:1]}
     return ('unavailable' if errors == len(previews) else 'partial' if errors else 'complete'), results
 
@@ -268,7 +286,7 @@ def _check_asset(client, deadline, asset, query, vision, intended_use):
     if vision.get('commons') and not matches:
         try:
             pages = _pages(_query(client, deadline, {'titles': '|'.join(vision['commons']), 'prop': 'imageinfo',
-                                                      'iiprop': 'sha1|extmetadata|url|mime'}))
+                                                      'iiprop': 'sha1|extmetadata|url|mime|size'}))
             for page in pages:
                 info = _page_image(page)
                 if not page['title'].startswith('File:'):
@@ -434,7 +452,8 @@ def _unchecked(asset, report_previews, *, limit=False):
 
 
 def review_images(extraction: dict, intended_use: str, online: bool, ai_enabled: bool,
-                  previews: dict[str, bytes] | None = None, *, report_previews: dict[str, bytes] | None = None) -> dict:
+                  previews: dict[str, bytes] | None = None, *, report_previews: dict[str, bytes] | None = None,
+                  reference: tuple[str, list[str]] | None = None) -> dict:
     assets = _assets(extraction)
     selected = assets[:MAX_ASSETS]
     if not selected:
@@ -448,10 +467,27 @@ def review_images(extraction: dict, intended_use: str, online: bool, ai_enabled:
     reverse_status, reversed_images = (_vision_matches(dict(list(previews.items())[:6])) if previews is not None
                                        else ('disabled', {}))
     reverse_checked = len(reversed_images)
-    linked_commons = list(dict.fromkeys(title for url in extraction.get('links', []) if (title := _commons_title(url))))[:2]
-    linked_stock = list(dict.fromkeys(photo_id for url in extraction.get('links', []) if (photo_id := pixabay.photo_id(url))))[:1]
+    urls = extraction.get('links', []) + (reference[1] if reference else [])
+    linked_check, linked_images = compare_links(selected, urls, report_previews or {})
+    if reference:
+        linked_check['reference'] = reference[0]
+    # Provider-reported matches are leads. Check supported pages directly when possible.
+    reverse_urls = [link['url'] for image in reversed_images.values() for link in image.get('links', [])[:3]]
+    _, checked_reverse = compare_links(selected, reverse_urls, report_previews or {})
+    linked_commons = list(dict.fromkeys(title for url in urls if (title := _commons_title(url))))[:2]
+    linked_stock = list(dict.fromkeys(photo_id for url in urls if (photo_id := pixabay.photo_id(url))))[:1]
     for image, item in zip(limited, selected):
         hints = reversed_images.setdefault(item['sha256'], {})
+        checked = [findings[item['sha256']] for findings in (linked_images, checked_reverse)
+                   if item['sha256'] in findings]
+        if checked:
+            links = {hit['url']: hit for result in checked for hit in result['links']}
+            for hit in hints.get('links', []):
+                links.setdefault(hit['url'], hit)
+            hints['links'] = list(links.values())[:8]
+            hints['label'] = next((label for result in checked for candidate in result['labels']
+                                   if (label := _meaningful(candidate))),
+                                  hints.get('label', ''))
         image['visual_hint'] = hints.get('label', '')
         hints['commons'] = list(dict.fromkeys(hints.get('commons', []) + linked_commons))[:4]
         hints['stock_ids'] = list(dict.fromkeys(hints.get('stock_ids', []) + linked_stock))[:1]
@@ -483,4 +519,5 @@ def review_images(extraction: dict, intended_use: str, online: bool, ai_enabled:
                       or reverse_status in {'unavailable', 'partial', 'not_configured', 'not_available'} else 'complete',
             'total': len(assets), 'checked': len(selected), 'model_status': planning['status'],
             'model_ranked': count, 'reverse_status': reverse_status, 'reverse_checked': reverse_checked,
+            'linked_check': linked_check,
             'items': items, 'checked_at': datetime.now(UTC).isoformat(timespec='seconds')}

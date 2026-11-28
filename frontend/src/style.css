@@ -322,6 +322,9 @@ a, button, input, summary { outline-offset: 4px; }
 .form-grid, .settings-grid, .results-grid { display: grid; grid-template-columns: minmax(0, 1.28fr) minmax(0, 1fr); gap: 16px; align-items: start; }
 .form-panel, .result-panel { padding: 20px; }
 .form-panel > .notice { margin: 14px 0 0; }
+.source-upload { margin-top: 18px; padding-top: 14px; border-top: 1px solid var(--line); }
+.source-upload p { margin: 6px 0 10px; }
+.source-selection { display: flex; align-items: center; gap: 8px; margin-top: 8px; overflow-wrap: anywhere; }
 .dropzone { display: grid; justify-items: center; gap: 9px; margin-top: 16px; padding: 31px 13px 26px; border: 1px dashed #6a4b39; border-radius: 10px; background: #211b17; text-align: center; transition: background 150ms, border-color 150ms; }
 .dropzone.dragging { border-color: var(--orange); background: #332116; }
 .drop-icon { display: grid; place-items: center; width: 50px; height: 50px; margin-bottom: 2px; border: 1px solid #62402b; border-radius: 10px; color: var(--orange-light); background: var(--orange-deep); }

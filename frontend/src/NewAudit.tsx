@@ -32,7 +32,7 @@ export function AuditConsent({ value, onChange, disabled = false }: {
         reverse_search: event.target.checked && value.reverse_search,
       })} />
       <Globe2 size={18} />
-      <span><strong>Поиск источников онлайн</strong><small>Commons получит хеши и краткие поисковые запросы из материала. {settings?.pixabay_configured && 'Pixabay получит поисковые запросы для подбора замен. '}{provider?.configured ? `Модель ${provider.label} получит текстовый контекст и поможет выбрать замены. ` : ''}{provider?.configured && provider.verify_tls === false && 'Проверка сертификата МАИ отключена.'}</small></span>
+      <span><strong>Поиск источников онлайн</strong><small>TraceMuse проверит ссылки из файлов на поддерживаемых сайтах. Commons получит хеши и краткие поисковые запросы. {settings?.pixabay_configured && 'Pixabay получит поисковые запросы для подбора замен. '}{provider?.configured ? `Модель ${provider.label} получит текстовый контекст и поможет выбрать замены. ` : ''}{provider?.configured && provider.verify_tls === false && 'Проверка сертификата МАИ отключена.'}</small></span>
     </label>
     {settings?.reverse_search_configured && <label className="consent-choice">
       <input type="checkbox" checked={Boolean(value.reverse_search)} disabled={!value.online_search} onChange={event => onChange({ ...value, reverse_search: event.target.checked })} />
@@ -48,7 +48,9 @@ export function NewAudit({ maxUploadMb, maxFiles = 10, onOpen }: {
   onOpen: (id: number) => void
 }) {
   const picker = useRef<HTMLInputElement>(null)
+  const sourcePicker = useRef<HTMLInputElement>(null)
   const [files, setFiles] = useState<File[]>([])
+  const [reference, setReference] = useState<File>()
   const [over, setOver] = useState(false)
   const [options, setOptions] = useState(localOptions)
   const [busy, setBusy] = useState(false)
@@ -97,12 +99,14 @@ export function NewAudit({ maxUploadMb, maxFiles = 10, onOpen }: {
       setIssues([`За один раз можно проверить до ${maxFiles} файлов.`])
       return
     }
-    if (maxUploadMb && files.reduce((total, file) => total + file.size, 0) > maxUploadMb * 1048576) {
+    const sourceFile = options.online_search ? reference : undefined
+    if (maxUploadMb && files.reduce((total, file) => total + file.size, sourceFile?.size ?? 0) > maxUploadMb * 1048576) {
       setIssues([`Общий размер файлов превышает ${maxUploadMb} МБ. Уберите часть файлов и запустите отдельную проверку.`])
       return
     }
     const data = new FormData()
     files.forEach(file => data.append('files', file))
+    if (sourceFile) data.append('reference', sourceFile)
     data.append('online_search', String(options.online_search))
     data.append('ai_analysis', String(options.ai_analysis))
     if (options.reverse_search) data.append('reverse_search', 'true')
@@ -119,7 +123,10 @@ export function NewAudit({ maxUploadMb, maxFiles = 10, onOpen }: {
       setIssues(errors.map(item => `${item.filename} — ${item.message}`))
       setCreated(response.items)
       if (response.items.length) {
-        if (!errors.length) setFiles([])
+        if (!errors.length) {
+          setFiles([])
+          setReference(undefined)
+        }
         else setFiles(current => current.filter(file => errors.some(error => file.name === error.filename)))
       }
       if (!errors.length && response.items.length === 1 && window.location.hash === '#/new') onOpen(response.items[0].id)
@@ -158,6 +165,28 @@ export function NewAudit({ maxUploadMb, maxFiles = 10, onOpen }: {
             <button className="icon-button" type="button" aria-label={`Убрать ${file.name}`} onClick={() => setFiles(current => current.filter((_, position) => position !== index))} disabled={busy}><X size={18} /></button>
           </li>)}
         </ul>}
+        {options.online_search && <div className="source-upload">
+          <strong>Есть версия со ссылками на источники?</strong>
+          <p className="muted">Добавьте её отдельно. TraceMuse сверит изображения с найденными в ней ссылками.</p>
+          <button className="button button-secondary" type="button" disabled={busy} onClick={() => sourcePicker.current?.click()}>
+            {reference ? 'Выбрать другую презентацию' : 'Добавить PPTX со ссылками'}
+          </button>
+          <input ref={sourcePicker} id="audit-reference" aria-label="Презентация со ссылками на источники" type="file" hidden
+            accept=".pptx" disabled={busy} onChange={event => {
+              const file = event.currentTarget.files?.[0]
+              event.currentTarget.value = ''
+              if (!file) return
+              if (!file.size || !file.name.toLowerCase().endsWith('.pptx')) {
+                setIssues(['Выберите непустую презентацию со ссылками в формате PPTX.'])
+                return
+              }
+              setIssues([])
+              setReference(file)
+            }} />
+          {reference && <div className="source-selection"><span>{reference.name}</span>
+            <button className="icon-button" type="button" aria-label="Убрать презентацию со ссылками" disabled={busy}
+              onClick={() => setReference(undefined)}><X size={16} /></button></div>}
+        </div>}
         {issues.length > 0 && <Notice error><ul className="messages">{issues.map((issue, index) => <li key={index}>{issue}</li>)}</ul></Notice>}
         {created.length > 0 && <div className="upload-results">
           <h3>Проверки готовы</h3>

@@ -195,9 +195,23 @@ def render_pdf(audit: dict) -> bytes:
     })
     if review and review["status"] != "no_images":
         paragraph("Права на изображения", heading)
-        paragraph(f"Онлайн-поиск · {review['checked']} из {review['total']} уникальных изображений.")
         if review["status"] == "local_only":
             paragraph("Для поиска источников и замен включите онлайн-поиск при повторной проверке.")
+        else:
+            paragraph(f"Онлайн-поиск · {review['checked']} из {review['total']} уникальных изображений.")
+        linked = review.get("linked_check") or {}
+        if linked.get("eligible") or linked.get("reference"):
+            where = f" из {linked['reference']}" if linked.get("reference") else ""
+            paragraph(f"По ссылкам{where} проверено {linked['checked']} из {linked['eligible']} поддерживаемых страниц и файлов. "
+                      f"Совпадения и возможные совпадения найдены для {linked['matched']} из {review['checked']} изображений.")
+        if reverse := review.get("reverse_status"):
+            message = {
+                "disabled": "Обратный поиск по изображению не включён. Работал поиск по каталогам и доступным ссылкам.",
+                "not_configured": "Ключ Google Cloud Vision отсутствует.",
+                "unavailable": "Google Cloud Vision не ответил или отклонил запрос.",
+                "not_available": "Не удалось подготовить растровые копии для Google Cloud Vision.",
+            }.get(reverse, f"Google Cloud Vision обработал {review.get('reverse_checked', 0)} из {review['checked']} изображений.")
+            paragraph(message, quiet)
         for item in review["items"]:
             rights = item.get("rights")
             choices = item.get("replacements", [item["replacement"]] if item.get("replacement") else [])
@@ -252,7 +266,9 @@ def render_pdf(audit: dict) -> bytes:
             if rights and rights["action"] != "keep" and not any(m.get("kind") == "no_credit" for m in choices) and review["status"] != "local_only":
                 paragraph("Подходящая замена без подписи не найдена.", quiet)
             for match in item.get("web_matches", []) or []:
-                fields({"Совпадение в интернете": match["title"], "url": match["url"]})
+                fields({"Совпадение в интернете": match["title"], "url": match["url"], "Результат сверки": match.get("match")})
+                paragraph(match.get("terms", ""))
+                fields({"Условия площадки": match.get("terms_url")})
 
     if photo_report:
         paragraph("История поиска, хеши и извлечённые данные доступны в JSON-отчёте.", quiet)

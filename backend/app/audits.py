@@ -188,7 +188,7 @@ def assessment(extraction: dict, sources: dict, legal: dict, intended_use: str) 
     limitations = [
         'Правовой статус, применимость ограничений и необходимость маркировки оцениваются по конкретному контексту.',
         'Метаданные и каталожные совпадения требуют подтверждения происхождения и полномочий правообладателя.',
-        'Поиск охватывает доступные индексы. OCR и поиск по всему интернету не выполняются.',
+        'Поиск охватывает доступные индексы и поддерживаемые ссылки. OCR не выполняется.',
     ]
     if extraction.get('warnings'):
         limitations.append('Извлечение выполнено с замечаниями. Подробности есть в блоке извлечения.')
@@ -197,7 +197,8 @@ def assessment(extraction: dict, sources: dict, legal: dict, intended_use: str) 
 
 
 def run_audit(stream: BinaryIO, raw_filename: str, online_search: bool, ai_analysis: bool,
-              intended_use: str = 'unspecified', reverse_search: bool = False) -> dict:
+              intended_use: str = 'unspecified', reverse_search: bool = False, *,
+              reference: tuple[str, list[str]] | None = None) -> dict:
     filename = display_filename(raw_filename)
     limit = settings.max_upload_mb * 1024 * 1024
     digest = hashlib.sha256()
@@ -219,7 +220,8 @@ def run_audit(stream: BinaryIO, raw_filename: str, online_search: bool, ai_analy
         previews = {}
         extracted = extract(pending, filename, previews=previews)
         image_review = review_images(extracted, intended_use, online_search, ai_analysis,
-                                     previews if online_search and reverse_search else None, report_previews=previews)
+                                     previews if online_search and reverse_search else None,
+                                     report_previews=previews, reference=reference)
         sources = search_sources(extracted, sha256, online_search)
         legal = check_legal(extracted)
         ai = analyze(extracted, sources, legal, ai_analysis, image_review=image_review)
