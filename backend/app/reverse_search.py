@@ -7,6 +7,7 @@ import os
 import re
 import ssl
 import subprocess
+from html import unescape
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from pathlib import Path
@@ -15,11 +16,13 @@ from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 from uuid import uuid4
 
 import httpx
+from lxml import etree, html
 from PicImageSearch import Yandex
 from PicImageSearch.exceptions import ParsingError
 
 from .config import BACKEND_DIR, settings
-from .evidence import _plain
+from .evidence import _plain, _read
+from .license_evidence import host_matches
 from .public_web import public_url
 
 YANDEX_HOSTS = {'yandex.ru', 'www.yandex.ru', 'yandex.com', 'www.yandex.com', 'ya.ru'}
@@ -28,6 +31,9 @@ NAMES = {'yandex': 'Яндекс', 'lens': 'Google Lens', 'bright_data': 'Bright
 LENS_DIR = BACKEND_DIR / '.venv-lens'
 LENS_WORKER = BACKEND_DIR / 'lens_worker.py'
 MAX_RESULTS = 40
+LICENSE_SITES = ('commons.wikimedia.org', 'freepik.com', 'unsplash.com', 'pexels.com', 'pixabay.com')
+IGNORED_SITES = ('storage.googleapis.com', 'vk.ru', 'mavink.com', 'sprashivalka.com', 'pinimg.com',
+                 'yandex.ru', 'yandex.com', 'yandex.net', 'ya.ru')
 
 
 class SearchError(ValueError):
@@ -63,6 +69,56 @@ def _unique(matches):
         if row:
             unique.setdefault(row['url'], row)
     return list(unique.values())[:MAX_RESULTS]
+
+
+def license_links(matches):
+    """Drop proxy and repost URLs, then prioritize original stock cards."""
+    ranked = []
+    for row in matches:
+        if not (url := _url(row.get('url'))):
+            continue
+        parsed = urlsplit(url)
+        host = parsed.hostname
+        if (any(host_matches(host, domain) for domain in IGNORED_SITES)
+                or re.search(r'(?:^|\.)pinterest\.[a-z]+(?:\.[a-z]{2})?$', host, re.I)):
+            continue
+        priority = next((i for i, domain in enumerate(LICENSE_SITES) if host_matches(host, domain)), len(LICENSE_SITES))
+        if priority < len(LICENSE_SITES) and (parsed.path == '/' or re.search(r'/(?:search|discover)(?:/|$)', parsed.path)):
+            continue
+        card = bool(re.search(r'/(?:wiki/File:|photos?/[^/?]+|(?:free|premium)-(?:photo|vector|psd)/[^/?]+|illustrations/[^/?]+)',
+                              parsed.path, re.I))
+        ranked.append((priority, not card, row | {'url': url}))
+    trusted = [item for item in ranked if item[0] < len(LICENSE_SITES)]
+    if trusted:
+        trusted.sort(key=lambda item: item[:2])
+        return _unique([row for _, _, row in trusted])
+    return _unique([row for _, _, row in ranked])[:3]
+
+
+def search_replacements(client, deadline, term):
+    """Search Yandex Images for photo-card leads. Licensing is checked on each card."""
+    data = _read(client, 'https://yandex.ru/images/search', {'text': term + ' site:pexels.com'}, deadline, 2_000_000)
+    try:
+        document = html.fromstring(data)
+    except (ValueError, etree.Error):
+        return []
+    matches = []
+    for node in document.xpath('//*[@data-state]')[:8]:
+        try:
+            rows = json.loads(node.get('data-state')).get('initialState', {}).get('serpList', {}).get('items', {}).get('entities', {})
+        except (ValueError, AttributeError, RecursionError):
+            continue
+        if not isinstance(rows, dict):
+            continue
+        for row in list(rows.values())[:16]:
+            if not isinstance(row, dict) or not isinstance(snippet := row.get('snippet'), dict):
+                continue
+            match = _match(snippet.get('title') or row.get('alt'), snippet.get('url'), row.get('image'))
+            if match and host_matches(urlsplit(match['url']).hostname, 'pexels.com'):
+                media = row.get('origUrl')
+                match['image_url'] = _url(unescape(media)) if isinstance(media, str) else None
+                matches.append(match)
+    return _unique(matches)[:6]
 
 
 def _http_status(code):

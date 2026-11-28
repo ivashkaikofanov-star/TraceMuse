@@ -20,6 +20,7 @@ class Settings(BaseSettings):
     bright_data_proxy_user: str = ""
     bright_data_proxy_password: SecretStr = SecretStr("")
     bright_data_ca_file: str = ""
+    exiftool_path: str = ""
     pixabay_api_key: SecretStr = SecretStr("")
     deepseek_api_key: SecretStr = SecretStr("")
     deepseek_model: str = "deepseek-flash"

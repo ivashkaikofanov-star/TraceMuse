@@ -9,3 +9,4 @@ defusedxml>=0.7,<1
 httpx>=0.28,<1
 reportlab>=4.4,<5
 PicImageSearch==3.12.11
+extruct==0.18.0

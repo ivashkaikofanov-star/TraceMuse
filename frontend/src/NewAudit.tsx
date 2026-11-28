@@ -32,7 +32,7 @@ export function AuditConsent({ value, onChange, disabled = false }: {
         reverse_search: event.target.checked,
       })} />
       <Globe2 size={18} />
-      <span><strong>Поиск источников онлайн</strong><small>Включает поиск по картинкам и проверку ссылок. Commons получит хеши и краткие поисковые запросы. {settings?.pixabay_configured && 'Pixabay получит поисковые запросы для подбора замен. '}{provider?.configured ? `Модель ${provider.label} получит текстовый контекст и поможет выбрать замены. ` : ''}{provider?.configured && provider.verify_tls === false && 'Проверка сертификата МАИ отключена.'}</small></span>
+      <span><strong>Поиск источников онлайн</strong><small>Включает поиск по картинкам и проверку ссылок. Commons получит хеши и запросы, а Яндекс — короткие запросы для подбора замен. {settings?.pixabay_configured && 'Pixabay получит поисковые запросы для подбора замен. '}{provider?.configured ? `Модель ${provider.label} получит текстовый контекст и поможет выбрать замены. ` : ''}{provider?.configured && provider.verify_tls === false && 'Проверка сертификата МАИ отключена.'}</small></span>
     </label>
     <label className="consent-choice">
       <input type="checkbox" checked={value.reverse_search ?? value.online_search} disabled={!value.online_search} onChange={event => onChange({ ...value, reverse_search: event.target.checked })} />

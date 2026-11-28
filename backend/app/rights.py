@@ -16,8 +16,8 @@ from .deepseek import plan_image_searches, rank_image_replacements
 from .evidence import HTTP_HEADERS, THUMBNAIL_HOSTS, _catalog_meta, _commons_title, _file_url, _http_url, _license, _pages, _plain, _query, _read
 from .extraction import image_phash, jpeg_preview, pixel_hash
 from .photo_license import CONFIRMED_MATCHES, commercial_conditions, photo_credit
-from .reverse_search import NAMES, search_previews
-from .web_images import compare_links
+from .reverse_search import NAMES, license_links, search_previews, search_replacements
+from .web_images import compare_links, licensed_replacements
 
 NETWORK_ERRORS = (httpx.HTTPError, OSError, ValueError, TypeError, AttributeError, Image.DecompressionBombError)
 STOP_WORDS = set('image photo picture logo photograph illustration background slide png jpg jpeg svg webp img file picture vector and with from this version crop copy of the in a by on is for corbis stock фотография слайд фото изображение логотип презентация картинка рисунок скачать версия'.split())
@@ -67,7 +67,7 @@ def _reverse_matches(previews: dict[str, bytes]) -> tuple[str, dict]:
     results = {}
     for sha, result in search_previews(previews).items():
         links = [{**match, 'match': f"{NAMES[result.provider]} предложил страницу",
-                  'images': [match['thumbnail']] if match['thumbnail'] else []} for match in result.matches]
+                  'images': [match['thumbnail']] if match['thumbnail'] else []} for match in license_links(result.matches)]
         results[sha] = {'search': result.status, 'links': links, 'provider': result.provider,
                         'attempts': result.attempts,
                         'label': next((label for hit in links if (label := _meaningful(hit['title'])) and ' ' in label), ''),
@@ -84,7 +84,8 @@ def _material(title: str, info: dict) -> dict:
         artist = ''
     record = {
         'title': title.removeprefix('File:'), 'url': _file_url(title), 'author': artist,
-        'license': license, 'description': _plain(_catalog_meta(info, 'ImageDescription'), 240),
+        'license': license, 'license_source': 'Wikimedia Commons',
+        'description': _plain(_catalog_meta(info, 'ImageDescription'), 240),
     }
     if _http_url(info.get('url'), host='upload.wikimedia.org'):
         record['download_url'] = info['url']
@@ -155,7 +156,8 @@ def _candidate_photo(client, deadline, asset, info, hosts=THUMBNAIL_HOSTS):
 def _item_outcome(matches, branding, intended_use, failed, alternatives):
     modified = intended_use in {'redistribute_modified', 'commercial_modified'}
     decision = commercial_conditions(matches, branded=branding, modified=modified)
-    source = min(matches, key=lambda item: item['match_kind'] not in CONFIRMED_MATCHES, default=None)
+    source = min(matches, key=lambda item: (item['match_kind'] not in CONFIRMED_MATCHES,
+                                           not item['license'].get('kind')), default=None)
     action = decision['action']
     if failed and action == 'unverified':
         decision['detail'] += ' Часть запросов к источникам не завершилась.'
@@ -199,7 +201,7 @@ def _stock_replacements(client, deadline, asset, term, excluded):
     return candidates
 
 
-def _check_asset(client, deadline, asset, query, reverse, intended_use):
+def _check_asset(client, deadline, asset, query, reverse, intended_use, preview=None):
     excluded, matches, alternatives = set(), [], []
     sha1 = asset.get('sha1')
     failed = False
@@ -242,6 +244,7 @@ def _check_asset(client, deadline, asset, query, reverse, intended_use):
         try:
             if match := _stock_match(client, deadline, asset, reverse['stock_ids'][0]):
                 matches.append(match)
+                match['license_source'] = 'Pixabay'
                 excluded.add(match['url'])
         except NETWORK_ERRORS:
             failed = True
@@ -314,15 +317,28 @@ def _check_asset(client, deadline, asset, query, reverse, intended_use):
                 failed = True
                 continue
             if photo:
-                preview, distance = photo
-                alternatives.append({**material, 'preview': preview, 'distance': distance, 'relevance': len(overlap)})
+                replacement_preview, distance = photo
+                alternatives.append({**material, 'preview': replacement_preview, 'distance': distance, 'relevance': len(overlap)})
     alternatives = [material for material in alternatives if material['url'] not in excluded]
     if replacement_term and not branding and not any(not material['license']['attribution_required'] for material in alternatives):
         try:
             alternatives.extend(_stock_replacements(client, deadline, asset, replacement_term, excluded))
         except NETWORK_ERRORS:
             failed = True
-    return _item_outcome(matches, branding, intended_use, failed, alternatives)
+    outcome = _item_outcome(matches, branding, intended_use, failed, alternatives)
+    if outcome['rights']['category'] == 'unknown':
+        suggestions = reverse.get('license_links', [])
+        replacement_deadline = monotonic() + 10
+        if replacement_term:
+            try:
+                suggestions = search_replacements(client, replacement_deadline, replacement_term) + suggestions
+            except NETWORK_ERRORS:
+                outcome['failed'] = True
+        if not branding:
+            outcome['alternatives'].extend(licensed_replacements(asset, suggestions, preview, replacement_deadline,
+                                                                  excluded | {item['url'] for item in alternatives}))
+        outcome['replacement_search'] = True
+    return outcome
 
 
 def _ready_replacement(material: dict) -> dict:
@@ -389,6 +405,22 @@ def _add_photos(asset, outcome, report_previews, reverse_evidence=None):
         match.get('verification') == 'verified' for match in outcome['web_matches']
     ) and rights['label'] == 'Условия не найдены или есть только перепечатка':
         rights['label'] = 'Копия найдена, условия не подтверждены'
+    if rights:
+        source = outcome.get('source') or {}
+        licence = source.get('license', {}) if source.get('match_kind') in CONFIRMED_MATCHES else {}
+        source_name = source.get('license_source') if licence.get('kind') else None
+        evidence_name = next((hit['license_source'] for hit in outcome['web_matches'] if hit.get('license_source')), None)
+        manual = any('Требуется ручная проверка' in hit.get('reason', '') for hit in outcome['web_matches'])
+        action_text = {
+            'keep': 'Можно использовать', 'credit': 'Нужна подпись',
+            'conditional': 'Выполнить условия лицензии', 'restricted': 'Заменить или получить разрешение',
+            'unverified': 'Требуется ручная проверка' if manual else 'Заменить',
+        }[rights['action']]
+        if rights['label'] == 'Условия не проверялись':
+            action_text = 'Включить онлайн-поиск'
+        license_type = licence.get('name') if licence.get('kind') and rights['category'] != 'unknown' else None
+        rights.update(license_type=license_type or 'Не установлено',
+                      license_source=source_name or evidence_name or 'Не найден', next_action=action_text)
     if preview := (report_previews or {}).get(asset['sha256']):
         outcome['original_preview'] = base64.b64encode(preview).decode('ascii')
     return outcome
@@ -445,6 +477,7 @@ def review_images(extraction: dict, intended_use: str, online: bool, ai_enabled:
         checked = [findings[item['sha256']] for findings in (linked_images, checked_reverse)
                    if item['sha256'] in findings]
         links = {hit['url']: hit for result in checked for hit in result['links']}
+        hints['license_links'] = hints.get('links', [])
         for hit in hints.get('links', []):
             page = checked_pages.get(hit['url'])
             evidence = {key: value for key, value in hit.items() if key != 'images'}
@@ -467,7 +500,8 @@ def review_images(extraction: dict, intended_use: str, online: bool, ai_enabled:
     deadline = monotonic() + 24
     with httpx.Client(headers=HTTP_HEADERS, follow_redirects=False) as client, ThreadPoolExecutor(max_workers=4) as pool:
         futures = [pool.submit(_check_asset, client, deadline, item, planning['queries'].get(item['id'], {}),
-                               reversed_images.get(item['sha256'], {}), intended_use) for item in selected]
+                               reversed_images.get(item['sha256'], {}), intended_use,
+                               (report_previews or {}).get(item['sha256'])) for item in selected]
         outcomes = [future.result() for future in futures]
     ranked, count = _rank_replacements(outcomes, selected, ai_enabled)
     items = []

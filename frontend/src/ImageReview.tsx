@@ -123,6 +123,9 @@ export function ImageReviewSection({ review }: { review: ImageReview }) {
           <div className="image-original">
             <h4>Исходное изображение</h4>
             <Photo preview={item.original_preview} label={`Исходное изображение · ${item.name}`} />
+            {rights?.license_source && <p><strong>Источник лицензии</strong> · {rights.license_source}</p>}
+            {rights?.license_type && <p><strong>Тип лицензии</strong> · {rights.license_type}</p>}
+            {rights?.next_action && <p><strong>Действие</strong> · {rights.next_action}</p>}
             <p>{rights?.detail ?? item.reason}</p>
             {rights?.warning && <p className="photo-warning">{rights.warning}</p>}
             {rights?.changes && <p className="muted">{rights.changes}</p>}
@@ -143,6 +146,7 @@ export function ImageReviewSection({ review }: { review: ImageReview }) {
             {match.author && <p>Автор · {match.author}</p>}
             {!match.author && match.page_author && <p>Автор публикации · {match.page_author}</p>}
             {match.publisher && <p>Издатель · {match.publisher}</p>}
+            {match.license_source && <p>Источник сведений о правах · {match.license_source}</p>}
             {match.reason && <p className="muted">{match.reason}</p>}
             {match.verification === 'not_checked' && <p className="muted">Сайт не проверялся в пределах этой проверки.</p>}
             {match.terms && <p>{match.terms} {match.terms_url && <Link url={match.terms_url}>Условия площадки</Link>}</p>}

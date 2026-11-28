@@ -95,13 +95,17 @@ export interface ImageReview {
       detail: string
       warning: string
       changes: string
+      license_source?: string
+      license_type?: string
+      next_action?: string
     }
     source?: LicensedImage | null
     replacement?: LicensedImage
     replacements?: LicensedImage[]
     credit?: string
     web_matches: Array<{ title: string, url: string, match: string, terms?: string, terms_url?: string,
-      author?: string, page_author?: string, publisher?: string, verification?: string, reason?: string }>
+      author?: string, page_author?: string, publisher?: string, verification?: string, reason?: string,
+      license_source?: string }>
   }>
 }
 

@@ -6,6 +6,8 @@ CONFIRMED_MATCHES = frozenset({'bytes', 'pixels', 'transformed'})
 
 def photo_credit(material: dict, modified: bool = False) -> str:
     licence = material['license']
+    if licence.get('kind') == 'freepik_attribution':
+        return f"Designed by Freepik. Источник: {material['url']}. Freepik License: {licence['url']}."
     author = f" — {material['author']}" if material['author'] else ''
     change = ' · Изображение изменено.' if modified else ''
     return f"«{material['title']}»{author}. Источник: {material['url']}. {licence['name']}: {licence['url']}.{change}"
@@ -25,6 +27,7 @@ def commercial_conditions(matches: list[dict], *, branded: bool, modified: bool)
                              'Распознан логотип. Разрешение на использование изображения и товарного знака не установлено. Подпись его не заменяет.')
         return _decision('unknown', label, 'unverified',
                          'Разрешение на коммерческое использование не установлено. Подпись сама по себе его не даёт.')
+    exact = [item for item in exact if item['license'].get('kind')] or exact
     source = exact[0]
     licence = source['license']
     kind = licence.get('kind')
@@ -66,6 +69,9 @@ def commercial_conditions(matches: list[dict], *, branded: bool, modified: bool)
                              'Лицензия требует атрибуции, но подтверждённые данные для готовой подписи не найдены.', changes=changes)
         if kind == 'cc_by' and not modified:
             changes = 'Если отредактируете изображение, укажите изменения в подписи.'
+        if kind == 'freepik_attribution':
+            return _decision(kind, licence['name'], 'credit',
+                             'Скачайте материал по бесплатной лицензии Freepik, сохраните её и добавьте готовую подпись.')
         return _decision(kind, licence['name'], 'credit',
                          'Коммерческое использование разрешено при соблюдении лицензии. Добавьте готовую подпись.',
                          warning='Пропуск обязательной атрибуции нарушает условия лицензии; правообладатель может предъявить требования.',

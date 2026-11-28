@@ -34,6 +34,7 @@ def install_pages(monkeypatch, pages):
         return PublicResponse(url, kind, data)
     monkeypatch.setattr(web_images, 'fetch', fetch)
     monkeypatch.setattr(rights, '_query', lambda *_args: {})
+    monkeypatch.setattr(rights, 'search_replacements', lambda *_args: [])
 
 
 @pytest.mark.parametrize(('licence_path', 'action'), [
@@ -123,6 +124,7 @@ def test_empty_visual_index_still_uses_metadata_for_text_search(tmp_path, monkey
         return {}
 
     monkeypatch.setattr(rights, '_query', search)
+    monkeypatch.setattr(rights, 'search_replacements', lambda *_args: [])
     item, = rights.review_images(ex, 'commercial', True, False, previews, report_previews=previews)['items']
     assert item['reverse_search'] == 'no_results'
     assert terms == ['Mountain evening lake']

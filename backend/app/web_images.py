@@ -1,8 +1,7 @@
 """Verify image matches and material-specific declarations on public websites."""
 
-import json
+import base64
 import re
-from collections import deque
 from concurrent.futures import ThreadPoolExecutor
 from hashlib import sha256
 from html.parser import HTMLParser
@@ -13,8 +12,9 @@ from urllib.parse import parse_qs, unquote, urljoin, urlsplit
 
 from PIL import Image, ImageChops, ImageStat
 
-from .evidence import PlainText, _license, _plain
-from .extraction import image_phash, pixel_hash
+from .evidence import PlainText, _plain
+from .extraction import image_phash, jpeg_preview, pixel_hash
+from .license_evidence import extract_license, page_declarations
 from .public_web import FetchError, fetch, public_url
 
 MAX_LINKS = 18
@@ -40,20 +40,6 @@ def _target(value):
     return url
 
 
-def _name(value):
-    if isinstance(value, list):
-        return ', '.join(filter(None, (_name(item) for item in value[:3] if isinstance(item, (str, dict)))))[:200]
-    if isinstance(value, dict):
-        return _plain(value.get('name'), 200)
-    return _plain(value, 200)
-
-
-def _field_url(value):
-    if isinstance(value, dict):
-        value = value.get('@id') or value.get('url')
-    return value if isinstance(value, str) and len(value) <= 2048 else ''
-
-
 class ImagePage(HTMLParser):
     def __init__(self):
         super().__init__(convert_charrefs=True)
@@ -64,8 +50,6 @@ class ImagePage(HTMLParser):
         self.publisher = ''
         self.original = ''
         self.canonical = ''
-        self.structured = []
-        self.script = None
 
     def handle_starttag(self, tag, attributes):
         attrs = dict(attributes)
@@ -89,46 +73,6 @@ class ImagePage(HTMLParser):
             value = attrs.get('src') or attrs.get('data-src') or ''
             if value and not value.startswith('data:'):
                 self.photos.append(value)
-        if tag == 'script' and (attrs.get('type') or '').lower() == 'application/ld+json':
-            self.script = []
-
-    def handle_data(self, value):
-        if self.script is not None:
-            self.script.append(value)
-
-    def handle_endtag(self, tag):
-        if tag == 'script' and self.script is not None:
-            raw = ''.join(self.script)
-            self.script = None
-            if len(self.structured) >= 12 or len(raw) > 180_000:
-                return
-            try:
-                self.structured.append(json.loads(raw))
-            except (ValueError, RecursionError):
-                pass
-
-
-def _image_objects(page):
-    nodes = deque(page.structured)
-    for _ in range(160):
-        if not nodes:
-            break
-        item = nodes.popleft()
-        if isinstance(item, list):
-            nodes.extend(item[:30])
-            continue
-        if not isinstance(item, dict):
-            continue
-        types = item.get('@type', [])
-        types = [types] if isinstance(types, str) else types
-        if isinstance(types, list) and any(
-            isinstance(kind, str) and kind.rsplit('/', 1)[-1] == 'ImageObject' for kind in types
-        ):
-            yield item
-        if not page.original:
-            page.original = _field_url(item.get('isBasedOn'))
-        nodes.extend(item[key] for key in ('@graph', 'image', 'mainEntity', 'associatedMedia', 'primaryImageOfPage')
-                     if key in item)
 
 
 def _sample(image):
@@ -141,7 +85,8 @@ def _image(data):
             raise FetchError('картинка превышает лимит или является анимацией')
         return {'sha256': sha256(data).hexdigest(), 'size': image.size,
                 'pixels': pixel_hash(image) if image.width * image.height <= 2_000_000 else None,
-                'phash': int(image_phash(image), 16), 'sample': _sample(image)}
+                'phash': int(image_phash(image), 16), 'sample': _sample(image),
+                'preview': jpeg_preview(image, 360)}
 
 
 def _difference(left, right):
@@ -200,11 +145,8 @@ def _stock_card(url):
 def _page_images(response):
     page = ImagePage()
     page.feed(response.data.decode('utf-8', errors='replace'))
-    by_url = {}
-    for item in _image_objects(page):
-        url = public_url(urljoin(response.url, _field_url(item.get('contentUrl') or item.get('url'))))
-        if url and url != response.url:
-            by_url.setdefault(url, []).append(item)
+    by_url, original = page_declarations(response.data, response.url)
+    page.original = page.original or original
     urls = list(by_url)
     for value in page.images + page.photos:
         if url := public_url(urljoin(response.url, value)):
@@ -223,6 +165,7 @@ def _describe(response, deadline, read, *, page_hint=None):
     if response.content_type and response.content_type not in {'text/html', 'application/xhtml+xml'}:
         raise FetchError('сайт вернул неподдерживаемый тип содержимого')
     page, entries = _page_images(response)
+    own_images = {url for url, _ in entries}
     candidates, errors = [], []
     if page_hint:
         # The index identifies a particular file on the page. Keep page licence data
@@ -239,7 +182,8 @@ def _describe(response, deadline, read, *, page_hint=None):
             errors.append(str(exc) if isinstance(exc, FetchError) else 'не удалось прочитать картинку')
             continue
         candidates.append({**record, 'url': response.url, 'media': media.url, 'title': page.title,
-                           'page_author': page.author, 'publisher': page.publisher, 'declarations': declarations})
+                           'page_author': page.author, 'publisher': page.publisher, 'declarations': declarations,
+                           'page_data': response.data, 'image_on_page': url in own_images})
     original = public_url(urljoin(response.url, page.original or page.canonical))
     return candidates, original if original != response.url else None, errors
 
@@ -258,6 +202,24 @@ def _material(candidate, match, deadline, read):
         return result, None
 
     record = {'title': title, 'url': candidate['url'], 'author': '', 'match': message, 'match_kind': kind}
+    evidence = extract_license(
+        candidate['url'], candidate['media'], page_data=candidate.get('page_data', b''),
+        declarations=candidate.get('declarations', []), image_on_page=candidate.get('image_on_page', False),
+        deadline=deadline, read=read,
+    )
+    if evidence.get('source'):
+        result['license_source'] = evidence['source']
+    if evidence.get('url'):
+        result['terms_url'] = evidence['url']
+    if evidence.get('notice'):
+        result['terms'] = evidence['notice']
+    if licence := evidence.get('license'):
+        if evidence.get('author'):
+            result['author'] = record['author'] = evidence['author']
+        result.setdefault('terms', f'Для этого изображения указана {licence["name"]}.')
+        return result, record | {'license': licence, 'license_source': evidence['source']}
+    if evidence.get('conflict'):
+        return result, None
     if parsed.hostname == 'backiee.com' and parsed.path.startswith('/wallpaper/') and rank == 0:
         try:
             text = PlainText()
@@ -269,6 +231,7 @@ def _material(candidate, match, deadline, read):
             return result, None
         if 'non-commercial use' in policy and 'commercial use requires permission' in policy:
             result.update(terms_url=BACKIEE_TERMS, terms='Для коммерческого использования нужно разрешение правообладателя.')
+            record['license_source'] = 'Условия Backiee'
             record['license'] = {'kind': 'backiee_personal', 'name': 'Backiee · личное использование',
                                  'url': BACKIEE_TERMS, 'commercial_allowed': False, 'restrictions': []}
             return result, record
@@ -278,37 +241,22 @@ def _material(candidate, match, deadline, read):
         if asset_id and media.hostname in STOCK_CDNS and re.search(rf'-{asset_id[1]}\.[a-z]+$', media.path, re.I):
             result.update(terms_url=STOCK_TERMS,
                           terms='Скачайте этот материал с подходящей лицензией и сохраните её.')
+            record['license_source'] = 'Правило Magnific / Freepik'
             record['license'] = {'kind': 'stock_download', 'name': 'Magnific / Freepik · премиум-материал',
                                  'url': STOCK_TERMS, 'restrictions': ['Требуется лицензия на скачанный материал.']}
             return result, record
     if parsed.hostname in STOCK_CDNS and parsed.path.startswith('/premium-'):
         result.update(terms_url=STOCK_TERMS, terms='Найдена премиум-копия. Условия проверьте в карточке материала.')
 
-    declarations = {}
-    for declaration in candidate.get('declarations', []):
-        raw = _field_url(declaration.get('license'))
-        licence_url = public_url(urljoin(candidate['url'], raw)) if raw else None
-        if not licence_url:
-            continue
-        result['terms_url'] = licence_url
-        licence = _license({'extmetadata': {'LicenseUrl': {'value': licence_url}}})
-        author = _name(declaration.get('creator') or declaration.get('author'))
-        if (not licence.get('kind') or (licence.get('attribution_required') and not author)
-                or (not author and not candidate.get('publisher'))):
-            result['terms'] = 'На странице есть запись об условиях. Не удалось подтвердить лицензию и данные для атрибуции.'
-            continue
-        declarations[licence['kind'], licence_url, author] = (licence, author)
-    if len(declarations) > 1:
-        result.pop('terms_url', None)
-        result['terms'] = 'На странице указаны разные условия или разные авторы этого изображения.'
-    if len(declarations) == 1:
-        licence, author = next(iter(declarations.values()))
-        if author:
-            result['author'] = record['author'] = author
-        result.update(terms_url=licence['url'], terms=f'На странице для этого изображения указана {licence["name"]}.')
-        licence['usage_note'] = 'Условия указаны издателем для этого изображения. Отдельные права на людей и товарные знаки проверяются дополнительно.'
-        return result, record | {'license': licence}
     return result, None
+
+
+def _check_error(error):
+    if isinstance(error, FetchError):
+        if 'HTTP 403' in str(error):
+            return 'Требуется ручная проверка: доступ к странице ограничен (HTTP 403).'
+        return str(error)
+    return 'Не удалось прочитать ответ сайта.'
 
 
 def _inspect(target, deadline, read, hints):
@@ -318,8 +266,7 @@ def _inspect(target, deadline, read, hints):
         response = read(target, deadline, MAX_DOWNLOAD)
         candidates, original, reasons = _describe(response, deadline, read, page_hint=hints)
     except READ_ERRORS as exc:
-        return [], {'url': target, 'status': 'unavailable',
-                    'reason': str(exc) if isinstance(exc, FetchError) else 'не удалось прочитать ответ сайта'}
+        return [], {'url': target, 'status': 'unavailable', 'reason': _check_error(exc)}
 
     stock_card = _stock_card(response.url)
     original = original or stock_card
@@ -337,7 +284,7 @@ def _inspect(target, deadline, read, hints):
             reasons.extend(errors)
         except READ_ERRORS as exc:
             reasons.append(f'исходная страница {urlsplit(original).hostname}: '
-                           + (str(exc) if isinstance(exc, FetchError) else 'не удалось прочитать ответ'))
+                           + _check_error(exc))
     if not candidates and not reasons:
         reasons.append('на странице не найдено доступное изображение для сверки')
     return candidates, {'url': target, 'status': 'checked' if candidates else 'unavailable',
@@ -393,3 +340,43 @@ def compare_links(assets, urls, previews, *, image_hints=None):
         matches[sha] = {'links': list(links.values())[:6], 'labels': labels[:6], 'materials': materials[:6]}
     return {'checked': sum(check['status'] != 'unavailable' for check in checks),
             'eligible': len(targets), 'matched': len(matches), 'pages': checks}, matches
+
+
+def licensed_replacements(asset, suggestions, preview, deadline, excluded):
+    """Check distinct candidate images and return only previews with confirmed terms."""
+    sample = None
+    if preview:
+        with Image.open(BytesIO(preview), formats=('JPEG',)) as image:
+            sample = _sample(image)
+    choices = []
+    for result in suggestions[:6]:
+        if monotonic() >= deadline or len(choices) >= 3:
+            break
+        url = result['url']
+        if url in excluded:
+            continue
+        candidates, _ = _inspect(url, deadline, fetch, None)
+        for candidate in candidates:
+            if (not candidate.get('image_on_page') or candidate['url'] in excluded or min(candidate['size']) < 200
+                    or _match(asset, candidate, sample)):
+                continue
+            if (hint := result.get('image_url')):
+                # A search hit can lead to a gallery or a different card after a redirect.
+                actual, hinted = urlsplit(candidate['media']), urlsplit(hint)
+                if actual.hostname != hinted.hostname or actual.path != hinted.path:
+                    continue
+            _, material = _material(candidate, (0, 'pixels', 'Изображение на карточке'), deadline, fetch)
+            if not material:
+                continue
+            licence = material['license']
+            if (licence.get('commercial_allowed') is not True or licence.get('restrictions')
+                    or licence.get('derivatives_distribution_allowed') is not True
+                    or (licence.get('attribution_required') and not material['author'])):
+                continue
+            distance = ((int(asset['phash'], 16) ^ candidate['phash']).bit_count() if asset.get('phash') else None)
+            choices.append(material | {'preview': base64.b64encode(candidate['preview']).decode('ascii'),
+                                       'download_url': candidate['media'], 'description': '',
+                                       'distance': distance, 'relevance': 1})
+            excluded.add(material['url'])
+            break
+    return choices

@@ -260,7 +260,9 @@ def render_pdf(audit: dict) -> bytes:
                                           ("INNERGRID", (0, 0), (-1, -1), 0.4, PAPER_LINE)]))
                 story.append(grid)
                 story.append(Spacer(1, 7))
-                fields({"Что нашли": rights["label"]})
+                fields({"Источник лицензии": rights.get("license_source"),
+                        "Тип лицензии": rights.get("license_type") or rights["label"],
+                        "Действие": rights.get("next_action")})
                 for line in (rights["detail"], rights["warning"], rights["changes"]):
                     paragraph(line)
             else:
@@ -284,6 +286,7 @@ def render_pdf(audit: dict) -> bytes:
             for match in item.get("web_matches", []) or []:
                 fields({"Совпадение в интернете": match["title"], "url": match["url"], "Результат сверки": match.get("match"),
                         "Автор": match.get("author"), "Издатель": match.get("publisher"),
+                        "Источник сведений о правах": match.get("license_source"),
                         "Автор публикации": match.get("page_author") if not match.get("author") else None})
                 paragraph(match.get("reason", ""), quiet)
                 if match.get("verification") == "not_checked":

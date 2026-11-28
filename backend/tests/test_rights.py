@@ -190,6 +190,7 @@ def test_unknown_original_keeps_second_replacement_only_if_visually_closer(monke
                           for n, image in enumerate([free, closer])}}
 
     monkeypatch.setattr(rights, '_query', query)
+    monkeypatch.setattr(rights, 'search_replacements', lambda *_: [])
     monkeypatch.setattr(rights, '_candidate_photo', lambda _c, _d, _a, image: (
         (_photo('green'), 28) if image['sha1'] == 'c' * 40 else (_photo('blue'), 13)
     ))
@@ -221,6 +222,7 @@ def test_pdf_embeds_original_and_both_replacement_photos(monkeypatch):
                           for n, image in enumerate([free, closer])}}
 
     monkeypatch.setattr(rights, '_query', query)
+    monkeypatch.setattr(rights, 'search_replacements', lambda *_: [])
     monkeypatch.setattr(rights, '_candidate_photo', lambda _c, _d, _a, image: (
         (_photo('green'), 28) if image['sha1'] == 'c' * 40 else (_photo('blue'), 13)
     ))
@@ -231,7 +233,8 @@ def test_pdf_embeds_original_and_both_replacement_photos(monkeypatch):
     }})))
     text = ' '.join(' '.join(page.extract_text().split()) for page in report.pages)
     assert sum(len(page.images) for page in report.pages) == 3
-    assert 'Условия не найдены или есть только перепечатка' in text
+    assert 'Тип лицензии · Не установлено' in text
+    assert 'Действие · Заменить' in text
     assert 'Замена без подписи' in text and 'Более похожая замена с подписью' in text
     assert 'SHA-256' not in text
 
