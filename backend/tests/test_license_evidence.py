@@ -14,6 +14,7 @@ from app.reverse_search import license_links
 
 CC_BY = 'https://creativecommons.org/licenses/by/4.0/'
 CC0 = 'https://creativecommons.org/publicdomain/zero/1.0/'
+WINDOWS_EXIFTOOL = 'C:/VS CODE/exiftool-13.64_64/exiftool.exe'
 
 
 def test_prioritize_stock_cards_and_ignore_proxies_and_reposts():
@@ -54,6 +55,21 @@ def test_copyright_notice_without_permission_stays_a_notice():
     assert result['source'] == 'JSON-LD на сайте'
     assert result['notice'] == 'Copyright Alice'
     assert not result.get('license')
+
+
+@pytest.mark.parametrize(('configured', 'available', 'expected'), [
+    ('', ('default-exiftool',), 'default-exiftool'),
+    ('custom-exiftool', ('default-exiftool', 'custom-exiftool', 'exiftool'), 'custom-exiftool'),
+    ('missing-exiftool', ('exiftool',), 'exiftool'),
+])
+def test_exiftool_resolves_local_default_and_path(monkeypatch, tmp_path, configured, available, expected):
+    assert license_evidence.DEFAULT_EXIFTOOL_PATH == WINDOWS_EXIFTOOL
+    default = str(tmp_path / 'default-exiftool')
+    monkeypatch.setattr(license_evidence, 'DEFAULT_EXIFTOOL_PATH', default)
+    monkeypatch.setattr(license_evidence.settings, 'exiftool_path', configured)
+    paths = {default if name == 'default-exiftool' else name for name in available}
+    monkeypatch.setattr(license_evidence.shutil, 'which', lambda path: path if path in paths else None)
+    assert license_evidence._exiftool_executable() == (default if expected == 'default-exiftool' else expected)
 
 
 def test_exiftool_uses_linked_rights_statement(monkeypatch):

@@ -13,7 +13,7 @@ from urllib.parse import urljoin, urlsplit
 import extruct
 from lxml import etree, html
 
-from .config import settings
+from .config import DEFAULT_EXIFTOOL_PATH, settings
 from .evidence import PlainText, _license, _plain
 from .public_web import FetchError, fetch, public_url
 
@@ -141,10 +141,17 @@ def _page_result(declarations, page_url):
     return note
 
 
-def _image_metadata(data, image_url, deadline):
-    executable = settings.exiftool_path or shutil.which('exiftool')
+def _exiftool_executable():
+    default = DEFAULT_EXIFTOOL_PATH if DEFAULT_EXIFTOOL_PATH and Path(DEFAULT_EXIFTOOL_PATH).is_absolute() else None
+    for path in (settings.exiftool_path.strip(), default, 'exiftool'):
+        if path and (executable := shutil.which(path)):
+            return executable
+    return None
+
+
+def _image_metadata(data, image_url, deadline, executable):
     remaining = deadline - monotonic()
-    if not executable or remaining <= 0:
+    if remaining <= 0:
         return {}
     suffix = Path(urlsplit(image_url).path).suffix.lower()
     suffix = suffix if suffix in {'.jpg', '.jpeg', '.png', '.gif', '.webp', '.avif'} else '.jpg'
@@ -288,10 +295,10 @@ def extract_license(page_url, image_url, *, page_data=None, declarations=None, i
         return structured
 
     metadata_note = {}
-    if settings.exiftool_path or shutil.which('exiftool'):
+    if executable := _exiftool_executable():
         try:
             media = read(image_url, deadline, MAX_IMAGE)
-            metadata = _image_metadata(media.data, image_url, deadline)
+            metadata = _image_metadata(media.data, image_url, deadline, executable)
             statement = field_url(metadata.get('WebStatement'))
             address = public_url(statement)
             notice = _plain(metadata.get('Rights') or metadata.get('CopyrightNotice'), 300)

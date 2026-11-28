@@ -1,12 +1,14 @@
 from pathlib import Path
 from typing import Literal
 
+from dotenv import dotenv_values
 from pydantic import Field, SecretStr, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 AIProvider = Literal["deepseek", "mai"]
 
 BACKEND_DIR = Path(__file__).resolve().parents[1]
+DEFAULT_EXIFTOOL_PATH = dotenv_values(BACKEND_DIR / ".env.defaults", interpolate=False).get("EXIFTOOL_PATH")
 
 
 class Settings(BaseSettings):
